@@ -1,6 +1,6 @@
 # Tình trạng dự án NYC Yellow Taxi Data Warehouse
 
-> Cập nhật: 16/11/2026 — nhánh `refactor/project-structure` của fork `thinhdao-77/NYC_TAXI_DataPipeline`.
+> Cập nhật: 16/11/2026 — nhánh `refactor/project-structure` của repo độc lập `thinhdao-77/NYC_TAXI_DataPipeline` (không còn là fork của repo nhóm).
 > File này được cập nhật cùng mỗi thay đổi. Lịch sử ở [mục 7](#7-nhật-ký-thay-đổi).
 
 ## 1. Mục tiêu
@@ -102,6 +102,26 @@ Lần chạy 26/10 (`run_20261026T034420Z`): 19 PASS, 8 FAIL, 14 BLOCKED. 8 FAIL
 6. Dashboard Power BI.
 
 ## 7. Nhật ký thay đổi
+
+### 16/11/2026 — Thêm CLAUDE.md
+- Thêm `CLAUDE.md` ở gốc repo: tóm tắt dự án, quy tắc bắt buộc (cập nhật PROJECT_STATUS, repo độc lập, làm từng bước), ràng buộc phụ thuộc (dbt trong venv `/opt/dbt`, duckdb 1.5.x vì Python 3.10), lệnh thường dùng, lưu ý CI. Mục đích: phiên Claude Code ở máy khác hoặc trên web có đủ ngữ cảnh mà không cần lịch sử chat.
+
+### 16/11/2026 — CI trên PR #1 bị failed (không do code)
+- PR #1 (`refactor/project-structure` → `main`, repo mới): job `checks` không được khởi chạy, GitHub báo *"The job was not started because your account is locked due to a billing issue."* Cần xử lý thanh toán ở <https://github.com/settings/billing>, rồi chạy lại.
+- Đã chạy đủ 3 bước của CI ở local trên commit `32b467e`: `compileall` OK, `docker compose config --quiet` OK, `dbt parse` trong image (dbt 1.12.7) OK, chỉ có cảnh báo 3 config path chưa có model.
+
+### 16/11/2026 — Tách khỏi repo nhóm
+- PR #8 (revert) đã được merge; `main` của repo nhóm đã giống hệt `36e24d3` (đã kiểm tra bằng `git diff`).
+- Fork cũ đổi tên thành `thinhdao-77/NYC_TAXI_DataPipeline-fork` (chưa xóa, còn nhánh `revert/pr-7` của PR #8).
+- Tạo repo độc lập `thinhdao-77/NYC_TAXI_DataPipeline` (public, `fork: false`), đẩy `main` (`36e24d3`) và `refactor/project-structure` (`32b467e`). Không còn tạo được PR vào repo nhóm.
+- Local: `origin` trỏ repo mới; xóa remote `upstream` và nhánh local `revert/pr-7`; `gh repo set-default` trỏ repo mới.
+- Còn lại: mục "Quy trình làm việc với Git" và lệnh clone trong README vẫn mô tả quy trình/URL của repo nhóm, sẽ viết lại khi cập nhật README theo DuckDB.
+
+### 16/11/2026 — Sự cố: PR merge nhầm vào repo gốc
+- PR #7 (`refactor/project-structure`) được tạo và merge nhầm vào `main` của repo gốc `nguyenanhtuan2702/NYC_TAXI` (merge commit `39a2f34`), kéo theo cả các commit `feat/fact-thinh`.
+- Đã mở PR revert: <https://github.com/nguyenanhtuan2702/NYC_TAXI/pull/8> (nhánh `revert/pr-7` trên fork, commit `d475177`); sau khi merge, `main` gốc giống hệt `36e24d3`. Cần nhóm duyệt và merge.
+- Hệ quả cần nhớ: khi nhóm merge `develop` → `main`, code Fact sẽ không tự quay lại; phải revert commit revert trước (đã ghi trong mô tả PR #8).
+- Phòng ngừa: `gh repo set-default` trỏ về fork; khi tạo PR trên web, kiểm tra ô *base repository* là `thinhdao-77/NYC_TAXI_DataPipeline` (GitHub mặc định chọn repo gốc).
 
 ### 16/11/2026 — DuckDB bước 1: Docker Compose
 - `docker-compose.yml`: bỏ service `postgres` và volume `pgdata`; đặt tên project `nyc-taxi`; Mage nâng giới hạn RAM lên 6 GB (DuckDB chạy trong tiến trình Mage/dbt); thêm biến `DUCKDB_PATH`, `DUCKDB_MEMORY_LIMIT`, `DUCKDB_THREADS`, `DUCKDB_TEMP_DIR`, `RAW_DATA_DIR`, đều có giá trị mặc định nên `.env` không còn bắt buộc.
