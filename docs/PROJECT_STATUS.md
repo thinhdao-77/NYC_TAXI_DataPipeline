@@ -23,8 +23,8 @@ Parquet nguồn → Mage ingestion → DuckDB (`raw`) → dbt staging → Dimens
 | SQL thủ công DDS | Lưu để tham khảo | `sql/warehouse/01..05` (Dimension idempotent + Fact + verify) |
 | Bộ kiểm thử QA (Stage/Dimension) | Hoàn thành | `tests/run_quality_tests.py`, chỉ đọc, suite `smoke`/`deep`/`all` |
 | Test plan + log | Hoàn thành | `docs/02_test_plans_and_logs/` (giữ 1 lần chạy mẫu `run_20261026T034420Z`) |
-| CI | Hoàn thành | `.github/workflows/ci.yml`: cú pháp Python, `docker compose config`, `dbt parse` |
-| Lệnh tiện ích | Hoàn thành | `tasks.ps1` (up/down/shell/sql/ingest-zones/ingest/profile/dbt-*/qa) |
+| CI / tự động hóa GitHub | Hoàn thành, **chưa chạy được trên GitHub** (tài khoản bị khóa thanh toán) | `ci.yml` chạy khi push mọi nhánh; `auto-pr.yml` tự mở PR vào `main`; repo tự xóa nhánh sau khi merge |
+| Lệnh tiện ích | Hoàn thành | `tasks.ps1` (up/down/shell/sql/ingest-zones/ingest/profile/dbt-*/qa/prune-branches) |
 | Báo cáo thành phần | Một phần | `docs/03_reports/sections/` (Vân, Khoa) |
 | Data modeling docs | Một phần | Có `docs/01_data_modeling/modeling.pdf` (chưa commit) |
 | OLAP mart | **Chưa có** | `dbt/models/olap_marts/{basic,advanced}` rỗng |
@@ -107,6 +107,19 @@ Lần chạy 26/10 (`run_20261026T034420Z`): 19 PASS, 8 FAIL, 14 BLOCKED. 8 FAIL
 6. Dashboard Power BI.
 
 ## 7. Nhật ký thay đổi
+
+### 17/11/2026 — Tự mở PR và tự xóa nhánh
+- Thêm `.github/workflows/auto-pr.yml`: push nhánh khác `main` → nếu nhánh chưa có PR đang mở và có commit mới so với `main` thì mở PR vào `main` (tiêu đề = dòng đầu commit mới nhất, nội dung liệt kê các commit). Bỏ qua sự kiện xóa nhánh. So sánh theo SHA để không lỗi với tên nhánh có `/`. Biến GitHub truyền qua `env`, không chèn trực tiếp vào script (tránh injection).
+- `ci.yml`: đổi trigger từ `push` (main, develop) + `pull_request` sang `push` mọi nhánh, vì PR do `GITHUB_TOKEN` tạo không kích hoạt `pull_request`; thêm `concurrency` (hủy lượt cũ khi push liên tiếp) và `permissions: contents: read`.
+- Cài đặt repo (qua `gh api`): bật `delete_branch_on_merge` (tự xóa nhánh sau khi merge); bật *Allow GitHub Actions to create and approve pull requests* (`can_approve_pull_request_reviews`), quyền mặc định của token vẫn là `read`.
+- Local: `git config fetch.prune true` (tự bỏ ref của nhánh remote đã xóa); thêm `.	asks.ps1 prune-branches` (xóa nhánh local có upstream `gone`, dùng `git branch -d` nên giữ nhánh chưa merge).
+- CLAUDE.md: cập nhật mục CI và quy trình làm việc với nhánh.
+- **Kiểm tra:**
+  - YAML hai workflow parse được (PyYAML); trigger, job, permissions đúng như thiết kế.
+  - Chạy thử script của `auto-pr` (thay `gh pr create` bằng `echo`) trên repo thật: nhánh có commit mới và chưa có PR → dựng đúng lệnh tạo PR; SHA trùng `main` → "không có commit mới", không tạo PR.
+  - `prune-branches`: không có gì để dọn → báo đúng; giả lập nhánh có upstream `gone` → xóa đúng nhánh đó.
+  - **Chưa chạy được trên GitHub Actions** vì tài khoản đang bị khóa thanh toán; `actionlint` chưa chạy (lệnh `docker run` bị chặn quyền).
+- Phát hiện khi kiểm tra: PR #1 đã được merge vào `main` lúc 16/11/2026 03:39 UTC (commit `a0fc1e6`); commit `ccf388a` (CLAUDE.md) push sau đó chưa vào `main`. Ref cũ `origin/revert/pr-7` đã được dọn.
 
 ### 17/11/2026 — Kế hoạch cơ chế nạp dữ liệu (chưa đổi code)
 - Thêm vào mục 8 bảng "Cơ chế nạp và lịch sử dữ liệu": không dùng CDC (nguồn là file theo tháng); 4a — Fact chuyển sang `delete+insert` theo `source_file_name` để sửa lỗi trùng khi nạp lại một tháng (rủi ro số 5); 5a — SCD Type 2 cho `dim_location` bằng `dbt snapshot` (tùy chọn).

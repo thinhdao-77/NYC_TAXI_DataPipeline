@@ -47,4 +47,9 @@ Khi chạy `docker compose run/exec` với đường dẫn Linux từ Git Bash, 
 
 ## Lưu ý về CI
 
-`.github/workflows/ci.yml` chạy kiểm tra cú pháp Python, `docker compose config`, `dbt parse`. Nếu job báo *"account is locked due to a billing issue"* thì đó là vấn đề tài khoản GitHub, không phải code; chạy lại các bước này ở local để kiểm chứng.
+- `.github/workflows/ci.yml`: chạy khi push lên **mọi nhánh** (không dùng sự kiện `pull_request`), kiểm tra cú pháp Python, `docker compose config`, `dbt parse`.
+- `.github/workflows/auto-pr.yml`: push một nhánh khác `main` thì tự mở PR vào `main` nếu nhánh chưa có PR đang mở và có commit mới. PR do `GITHUB_TOKEN` tạo không kích hoạt workflow khác, vì vậy CI chạy theo `push`.
+- Repo bật *Automatically delete head branches*: merge PR thì nhánh remote tự xóa; dọn nhánh local bằng `.\tasks.ps1 prune-branches`.
+- Quy trình: tạo nhánh từ `main` mới nhất → commit → push → PR tự mở → kiểm tra → merge.
+
+Nếu job báo *"account is locked due to a billing issue"* thì đó là vấn đề tài khoản GitHub, không phải code; chạy lại các bước này ở local để kiểm chứng.

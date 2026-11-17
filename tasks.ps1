@@ -12,7 +12,7 @@ param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'up', 'down', 'ps', 'logs', 'shell', 'sql', 'download-raw',
                  'ingest-zones', 'ingest', 'profile', 'dbt-deps', 'dbt-run', 'dbt-test',
-                 'dbt-build', 'qa')]
+                 'dbt-build', 'qa', 'prune-branches')]
     [string]$Task = 'help',
 
     [Parameter(Position = 1)]
@@ -60,6 +60,7 @@ Tasks:
   dbt-deps | dbt-run | dbt-test | dbt-build [selector]
                                     Chạy dbt trong container Mage (vd: dbt-build dim_vendor)
   qa [smoke|deep|all]               Chạy runner QA chỉ đọc (mặc định smoke)
+  prune-branches                    Xóa nhánh local mà nhánh remote đã bị xóa (sau khi merge PR)
 '@
     }
     'up'           { docker compose up -d --build; docker compose ps }
@@ -92,5 +93,17 @@ Tasks:
     'qa' {
         $suite = if ($Arg) { $Arg } else { 'smoke' }
         python tests\run_quality_tests.py --suite $suite
+    }
+    'prune-branches' {
+        git fetch --prune origin
+        $current = git branch --show-current
+        $gone = git branch -vv | Where-Object { $_ -match '\[origin/[^\]]+: gone\]' } |
+            ForEach-Object { ($_.TrimStart('*', ' ') -split '\s+')[0] }
+        if (-not $gone) { Write-Output 'Không có nhánh local nào cần dọn.'; return }
+        foreach ($b in $gone) {
+            if ($b -eq $current) { Write-Output "Bỏ qua $b (đang checkout; chuyển sang main trước)"; continue }
+            # -d (không phải -D): git từ chối xóa nếu nhánh có commit chưa được merge
+            git branch -d $b
+        }
     }
 }
