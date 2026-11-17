@@ -1,9 +1,19 @@
 name: CI
 
+# Chạy theo push trên mọi nhánh (không dùng pull_request): PR do workflow auto-pr.yml tạo
+# bằng GITHUB_TOKEN không kích hoạt sự kiện pull_request. Kết quả CI gắn với commit nên
+# vẫn hiện trên PR.
 on:
   push:
-    branches: [main, develop]
-  pull_request:
+    branches: ['**']
+
+# Push liên tiếp lên cùng nhánh thì hủy lượt chạy cũ.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   checks:
