@@ -2,7 +2,6 @@
 data/raw/*
 !data/raw/.gitkeep
 *.parquet
-!data/sample/*.parquet
 *.duckdb
 *.duckdb.wal
 data/warehouse/*
