@@ -13,7 +13,7 @@ Kho dữ liệu NYC Yellow Taxi 2024–2025, dự án cá nhân cho CV. Pipeline
 - **Mỗi thay đổi phải cập nhật `docs/PROJECT_STATUS.md`** trong cùng lượt làm việc: sửa bảng trạng thái, thêm mục có ngày vào "Nhật ký thay đổi", và ghi rõ đã kiểm tra những gì.
 - **Repo độc lập**: `origin` = `thinhdao-77/NYC_TAXI_DataPipeline`. Không thêm remote, không push, không tạo PR vào repo nhóm `nguyenanhtuan2702/NYC_TAXI` (từng merge nhầm PR #7, phải revert). Tạo PR bằng `gh` và kiểm tra base repo trước.
 - **Làm từng bước theo thứ tự pipeline**, xong và chạy thử một bước rồi mới sang bước sau (xem mục 8 của PROJECT_STATUS).
-- Chỉ commit/push khi người dùng yêu cầu. Không commit `docs/01_data_modeling/modeling.pdf` nếu chưa được hỏi.
+- Chỉ commit/push khi người dùng yêu cầu.
 
 ## Môi trường và phụ thuộc
 

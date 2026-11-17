@@ -68,7 +68,7 @@ NYC_TAXI_DataPipeline/
 │   ├── download_raw.ps1
 │   ├── raw/                         # File tải về, không commit
 │   ├── reference/                   # Taxi Zone Lookup và ranh giới khu vực
-│   └── sample/                      # Dữ liệu mẫu (nếu có)
+│   └── warehouse/                   # File DuckDB nyc_taxi.duckdb, không commit
 ├── dbt/                             # Tầng transform chính
 │   ├── dbt_project.yml, profiles.yml
 │   ├── macros/

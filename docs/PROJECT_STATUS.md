@@ -1,6 +1,6 @@
 # Tình trạng dự án NYC Yellow Taxi Data Warehouse
 
-> Cập nhật: 16/11/2026 — nhánh `refactor/project-structure` của repo độc lập `thinhdao-77/NYC_TAXI_DataPipeline` (không còn là fork của repo nhóm).
+> Cập nhật: 17/11/2026 — nhánh `main` của repo độc lập `thinhdao-77/NYC_TAXI_DataPipeline` (không còn là fork của repo nhóm).
 > File này được cập nhật cùng mỗi thay đổi. Lịch sử ở [mục 7](#7-nhật-ký-thay-đổi).
 
 ## 1. Mục tiêu
@@ -23,10 +23,10 @@ Parquet nguồn → Mage ingestion → DuckDB (`raw`) → dbt staging → Dimens
 | SQL thủ công DDS | Lưu để tham khảo | `sql/warehouse/01..05` (Dimension idempotent + Fact + verify) |
 | Bộ kiểm thử QA (Stage/Dimension) | Hoàn thành | `tests/run_quality_tests.py`, chỉ đọc, suite `smoke`/`deep`/`all` |
 | Test plan + log | Hoàn thành | `docs/02_test_plans_and_logs/` (giữ 1 lần chạy mẫu `run_20261026T034420Z`) |
-| CI / tự động hóa GitHub | Hoàn thành, **chưa chạy được trên GitHub** (tài khoản bị khóa thanh toán) | `ci.yml` chạy khi push mọi nhánh; `auto-pr.yml` tự mở PR vào `main`; repo tự xóa nhánh sau khi merge |
+| CI / tự động hóa GitHub | **Hoàn thành, đã chạy thật trên GitHub** | `ci.yml` chạy khi push mọi nhánh; `auto-pr.yml` tự mở PR vào `main`; repo tự xóa nhánh sau khi merge |
 | Lệnh tiện ích | Hoàn thành | `tasks.ps1` (up/down/shell/sql/ingest-zones/ingest/profile/dbt-*/qa/prune-branches) |
 | Báo cáo thành phần | Một phần | `docs/03_reports/sections/` (Vân, Khoa) |
-| Data modeling docs | Một phần | Có `docs/01_data_modeling/modeling.pdf` (chưa commit) |
+| Data modeling docs | Một phần | `docs/01_data_modeling/modeling.pdf` (Giai đoạn 1 của nhóm: business event, 8 Dimension, Fact, measures, truy vấn kiểm chứng Star Schema); sơ đồ Star Schema chỉ có qua link Google Drive trong PDF |
 | OLAP mart | **Chưa có** | `dbt/models/olap_marts/{basic,advanced}` rỗng |
 | Pipeline ELT end-to-end | **Chưa có** | Cần pipeline Mage: ingest → `dbt build` |
 | Power BI | **Chưa có** | `powerbi/` rỗng |
@@ -79,7 +79,7 @@ Lần chạy 26/10 (`run_20261026T034420Z`): 19 PASS, 8 FAIL, 14 BLOCKED. 8 FAIL
 ```text
 .
 ├── .github/workflows/ci.yml
-├── data/{raw,reference,sample}, download_raw.ps1
+├── data/{raw,reference,warehouse}, download_raw.ps1
 ├── dbt/                      # transform chính: sources → dds (dims, facts) → olap_marts
 ├── mage/                     # ingestion: pipelines ingest_zone_lookup, ingest_yellow_trips; utils/duckdb_helpers.py
 ├── sql/
@@ -101,24 +101,39 @@ Lần chạy 26/10 (`run_20261026T034420Z`): 19 PASS, 8 FAIL, 14 BLOCKED. 8 FAIL
 
 1. Tiếp tục chuyển sang DuckDB: bước 3 (Staging) → bước 6 (Power BI), xem [mục 8](#8-chuyển-sang-duckdb).
 2. Quyết định giữ hay bỏ `sql/warehouse/`; thống nhất `TripSK` cho Fact.
-3. Commit `docs/01_data_modeling/modeling.pdf` (hoặc chuyển thành markdown/ERD) và bổ sung data dictionary.
+3. Chuyển nội dung `modeling.pdf` thành markdown + ERD trong repo (sơ đồ hiện chỉ có qua link Google Drive) và bổ sung data dictionary.
 4. Xây OLAP mart (`dbt/models/olap_marts/`).
 5. Pipeline Mage end-to-end: ingest → `dbt build`.
 6. Dashboard Power BI.
 
 ## 7. Nhật ký thay đổi
 
+### 17/11/2026 — Commit tài liệu Data Modeling
+- Commit `docs/01_data_modeling/modeling.pdf` (10 trang, 321 KB, xuất từ Google Docs) theo yêu cầu. Đã đọc nội dung trước khi đưa lên repo public: không có email, mã số sinh viên, số điện thoại; có nhắc "Nhóm 2" và một link Google Drive chia sẻ công khai tới sơ đồ Star Schema (trang 5).
+- CLAUDE.md: bỏ quy tắc "không commit modeling.pdf".
+
+### 17/11/2026 — Bỏ thư mục `data/sample/`
+- Xóa `data/sample/.gitkeep` (thư mục rỗng, không dùng); bỏ dòng tương ứng trong cây thư mục của README và PROJECT_STATUS, bỏ ngoại lệ `!data/sample/*.parquet` trong `.gitignore`.
+
+### 17/11/2026 — Tài khoản GitHub mở khóa, kiểm chứng CI và Auto PR
+- Người dùng thêm phương thức thanh toán; trang Billing: gói GitHub Free + Copilot Free ($0), không có khoản nợ đang chờ. Actions chạy lại được.
+- Chạy lại run `44000060286` (Auto PR): **success**, tạo PR #2 <https://github.com/thinhdao-77/NYC_TAXI_DataPipeline/pull/2> (tác giả `github-actions`, `refactor/project-structure` → `main`, liệt kê 3 commit `ccf388a`, `7f519b6`, `37e08c9`).
+- Chạy lại run `44000060109` (CI): **success** trong 36 s, đủ các bước cài phụ thuộc, `compileall`, `docker compose config`, `dbt parse` trên Python 3.12.
+- `gh pr checks 2`: hiện cả `checks` và `open-pr` đều pass, xác nhận kết quả CI chạy theo `push` vẫn gắn lên PR.
+- PR #2 merge lúc 17/11/2026 02:17 UTC (merge commit `7dc00b6`); nhánh `refactor/project-structure` trên GitHub **tự xóa** (git báo `[gone]`). Local: `git pull` lên `7dc00b6`, `.\tasks.ps1 prune-branches` xóa nhánh local (và đã bỏ qua đúng khi nhánh đó đang checkout). Toàn bộ quy trình nhánh → PR tự mở → CI → merge → tự xóa nhánh đã chạy thật.
+
 ### 17/11/2026 — Tự mở PR và tự xóa nhánh
 - Thêm `.github/workflows/auto-pr.yml`: push nhánh khác `main` → nếu nhánh chưa có PR đang mở và có commit mới so với `main` thì mở PR vào `main` (tiêu đề = dòng đầu commit mới nhất, nội dung liệt kê các commit). Bỏ qua sự kiện xóa nhánh. So sánh theo SHA để không lỗi với tên nhánh có `/`. Biến GitHub truyền qua `env`, không chèn trực tiếp vào script (tránh injection).
 - `ci.yml`: đổi trigger từ `push` (main, develop) + `pull_request` sang `push` mọi nhánh, vì PR do `GITHUB_TOKEN` tạo không kích hoạt `pull_request`; thêm `concurrency` (hủy lượt cũ khi push liên tiếp) và `permissions: contents: read`.
 - Cài đặt repo (qua `gh api`): bật `delete_branch_on_merge` (tự xóa nhánh sau khi merge); bật *Allow GitHub Actions to create and approve pull requests* (`can_approve_pull_request_reviews`), quyền mặc định của token vẫn là `read`.
-- Local: `git config fetch.prune true` (tự bỏ ref của nhánh remote đã xóa); thêm `.	asks.ps1 prune-branches` (xóa nhánh local có upstream `gone`, dùng `git branch -d` nên giữ nhánh chưa merge).
+- Local: `git config fetch.prune true` (tự bỏ ref của nhánh remote đã xóa); thêm `.\tasks.ps1 prune-branches` (xóa nhánh local có upstream `gone`, dùng `git branch -d` nên giữ nhánh chưa merge).
 - CLAUDE.md: cập nhật mục CI và quy trình làm việc với nhánh.
 - **Kiểm tra:**
   - YAML hai workflow parse được (PyYAML); trigger, job, permissions đúng như thiết kế.
   - Chạy thử script của `auto-pr` (thay `gh pr create` bằng `echo`) trên repo thật: nhánh có commit mới và chưa có PR → dựng đúng lệnh tạo PR; SHA trùng `main` → "không có commit mới", không tạo PR.
   - `prune-branches`: không có gì để dọn → báo đúng; giả lập nhánh có upstream `gone` → xóa đúng nhánh đó.
   - **Chưa chạy được trên GitHub Actions** vì tài khoản đang bị khóa thanh toán; `actionlint` chưa chạy (lệnh `docker run` bị chặn quyền).
+- Push commit `37e08c9` (17/11/2026): cả `Auto PR` (run 44000060286) và `CI` (run 44000060109) được kích hoạt đúng theo trigger mới, nhưng job không được khởi chạy vì tài khoản bị khóa thanh toán. Sau khi mở khóa: `gh run rerun 44000060286` để tạo PR, `gh run rerun 44000060109` để chạy CI.
 - Phát hiện khi kiểm tra: PR #1 đã được merge vào `main` lúc 16/11/2026 03:39 UTC (commit `a0fc1e6`); commit `ccf388a` (CLAUDE.md) push sau đó chưa vào `main`. Ref cũ `origin/revert/pr-7` đã được dọn.
 
 ### 17/11/2026 — Kế hoạch cơ chế nạp dữ liệu (chưa đổi code)
