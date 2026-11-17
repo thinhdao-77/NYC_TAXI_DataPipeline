@@ -1,6 +1,6 @@
 # NYC Yellow Taxi Data Warehouse
 
-> **Đang chuyển từ PostgreSQL sang DuckDB (từ 16/11/2026).** Bước 1 (Docker Compose) đã xong: không còn service PostgreSQL. Các hướng dẫn PostgreSQL bên dưới sẽ được viết lại theo từng bước; tiến độ xem [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md#8-chuyển-sang-duckdb).
+> **Đang chuyển từ PostgreSQL sang DuckDB (từ 16/11/2026).** Đã xong bước 1 (Docker Compose, không còn PostgreSQL) và bước 2 (ingestion vào DuckDB, xem [docs/guides/ingestion.md](docs/guides/ingestion.md)). Các hướng dẫn PostgreSQL bên dưới sẽ được viết lại theo từng bước; tiến độ xem [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md#8-chuyển-sang-duckdb).
 
 Dự án xây dựng quy trình xử lý và phân tích dữ liệu **NYC Yellow Taxi Trip Records** cho giai đoạn 2024–2025. Repo hiện có: nạp dữ liệu nguồn vào PostgreSQL Staging bằng Mage.ai, và tầng DDS (8 Dimension + Fact) build bằng dbt. OLAP mart, Power BI và pipeline ELT end-to-end đang phát triển tiếp. Tình trạng chi tiết: [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
@@ -88,7 +88,7 @@ NYC_TAXI_DataPipeline/
 ├── mage/                            # Ingestion / orchestration
 │   ├── data_exporters/
 │   ├── data_loaders/
-│   ├── pipelines/                   # ingest_zone_lookup, ingest_trips_to_postgres
+│   ├── pipelines/                   # ingest_zone_lookup, ingest_yellow_trips (ghi vào DuckDB)
 │   ├── transformers/
 │   ├── custom/
 │   └── io_config.yaml

@@ -26,10 +26,10 @@ RESULTS = ROOT / "docs" / "02_test_plans_and_logs" / "runs"
 REQUIRED_FILES = [
     "docker-compose.yml",
     "mage/io_config.yaml",
-    "mage/data_exporters/load_trips_to_stage.py",
+    "mage/data_exporters/load_trips_to_raw.py",
     "mage/data_loaders/load_zone_lookup.py",
     "mage/data_exporters/export_zone_lookup.py",
-    "sql/ddl/02_create_stage.sql",
+    "sql/ddl/02_create_raw.sql",
     "sql/warehouse/01_create_dimensions.sql",
     "sql/warehouse/02_load_dimensions.sql",
     "sql/profiling/02_profile_errors.sql",
@@ -511,7 +511,7 @@ def smoke_stage(r: Reporter, conn: Any) -> bool:
             ok_all = False
     csv_ok = (ROOT / "data/reference/taxi_zone_lookup.csv").is_file()
     parquet_files = list((ROOT / "data/raw").glob("*.parquet")) if (ROOT / "data/raw").exists() else []
-    loader_ok = (ROOT / "mage/data_exporters/load_trips_to_stage.py").is_file()
+    loader_ok = (ROOT / "mage/data_exporters/load_trips_to_raw.py").is_file()
     r.add("STG-SM-04", "Source inputs and loader files are available", "Stage Smoke",
           "PASS" if csv_ok and loader_ok else "FAIL",
           "Zone CSV and Mage loader present; no source download performed",

@@ -39,7 +39,7 @@ Khi chạy `docker compose run/exec` với đường dẫn Linux từ Git Bash, 
 
 ## Cấu trúc
 
-- `mage/`: ingestion (pipelines `ingest_zone_lookup`, `ingest_trips_to_postgres`).
+- `mage/`: ingestion (pipelines `ingest_zone_lookup`, `ingest_yellow_trips`) ghi vào schema `raw` của DuckDB; helper chung ở `mage/utils/duckdb_helpers.py`, DDL ở `sql/ddl/`.
 - `dbt/`: transform chính. Dimension dùng SK ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`); Fact incremental theo `batch_id`, tham chiếu Dimension bằng `ref()`.
 - `sql/ddl`, `sql/profiling`: SQL staging và kiểm tra dữ liệu nguồn. `sql/warehouse`: bản SQL thủ công cũ, chỉ tham khảo.
 - `tests/run_quality_tests.py`: runner QA chỉ đọc.

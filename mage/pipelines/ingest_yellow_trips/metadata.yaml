@@ -7,13 +7,13 @@ blocks:
   executor_type: local_python
   has_callback: false
   language: python
-  name: load_trips_to_stage
+  name: load_trips_to_raw
   retry_config: null
   status: executed
   timeout: null
   type: data_exporter
   upstream_blocks: []
-  uuid: load_trips_to_stage
+  uuid: load_trips_to_raw
 cache_block_output_in_memory: false
 callbacks: []
 concurrency_config: {}
@@ -25,7 +25,7 @@ executor_config: {}
 executor_count: 1
 executor_type: null
 extensions: {}
-name: ingest_trips_to_postgres
+name: ingest_yellow_trips
 notification_config: {}
 remote_variables_dir: null
 retry_config: {}
@@ -35,7 +35,7 @@ settings:
 spark_config: {}
 tags: []
 type: python
-uuid: ingest_trips_to_postgres
+uuid: ingest_yellow_trips
 variables:
   file_name: ALL
 variables_dir: /home/src/mage_data/mage

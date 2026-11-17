@@ -1,5 +1,7 @@
 # Hướng dẫn cài môi trường và chạy phần Staging (Source → Staging)
 
+> **Tài liệu cũ (PostgreSQL).** Từ 16/11/2026 dự án dùng DuckDB; cách nạp dữ liệu hiện tại xem [ingestion.md](ingestion.md). Các lệnh `psql`, pipeline `ingest_trips_to_postgres` và block `load_trips_to_stage` trong file này không còn dùng được. Phần mô tả biến pipeline và profiling vẫn có giá trị tham khảo.
+
 
 > **Vì sao ai cũng phải tự nạp?** Git chỉ chứa code (script, pipeline), không chứa dữ liệu. Dữ liệu PostgreSQL nằm trong Docker volume trên máy của từng người, nên máy mới sẽ có database trống.
 

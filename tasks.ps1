@@ -11,7 +11,8 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'up', 'down', 'ps', 'logs', 'shell', 'sql', 'download-raw',
-                 'profile', 'dbt-deps', 'dbt-run', 'dbt-test', 'dbt-build', 'qa')]
+                 'ingest-zones', 'ingest', 'profile', 'dbt-deps', 'dbt-run', 'dbt-test',
+                 'dbt-build', 'qa')]
     [string]$Task = 'help',
 
     [Parameter(Position = 1)]
@@ -30,6 +31,14 @@ function Invoke-DuckDb([string]$Sql) {
     $Sql | docker compose exec -T mage python -c $DuckDbQuery
 }
 
+# Chạy pipeline Mage không cần giao diện. PowerShell 5.1 làm mất dấu " khi truyền cho
+# chương trình ngoài, nên JSON phải escape thành \".
+function Invoke-MagePipeline([string]$Pipeline, [string]$VarsJson) {
+    $cmd = @('compose', 'exec', '-T', 'mage', 'mage', 'run', '/home/src/mage', $Pipeline)
+    if ($VarsJson) { $cmd += @('--runtime-vars', ($VarsJson -replace '"', '\"')) }
+    & docker @cmd
+}
+
 # dbt chạy trong container Mage
 function Invoke-Dbt([string[]]$DbtArgs) {
     docker compose exec -T mage dbt @DbtArgs --project-dir /home/src/dbt --profiles-dir /home/src/dbt
@@ -43,6 +52,10 @@ Tasks:
   shell                             Mở bash trong container Mage
   sql "<câu SQL>"                   Truy vấn file DuckDB (chỉ đọc)
   download-raw                      Tải trước Parquet vào data/raw (tùy chọn)
+  ingest-zones                      Nạp Taxi Zone Lookup vào raw.taxi_zone_lookup
+  ingest [file | ALL | JSON]        Nạp chuyến đi vào raw.yellow_tripdata, mặc định ALL
+                                    vd: ingest yellow_tripdata_2024-01.parquet
+                                        ingest '{"file_name":"ALL","year":2024}'
   profile <file.sql>                Chạy một truy vấn trong sql/profiling
   dbt-deps | dbt-run | dbt-test | dbt-build [selector]
                                     Chạy dbt trong container Mage (vd: dbt-build dim_vendor)
@@ -55,10 +68,17 @@ Tasks:
     'logs'         { if ($Arg) { docker compose logs -f $Arg } else { docker compose logs -f } }
     'shell'        { docker compose exec mage bash }
     'sql' {
-        if (-not $Arg) { throw 'Cần câu SQL, vd: .	asks.ps1 sql "show all tables"' }
+        if (-not $Arg) { throw 'Cần câu SQL, vd: .\tasks.ps1 sql "show all tables"' }
         Invoke-DuckDb $Arg
     }
     'download-raw' { powershell -ExecutionPolicy Bypass -File data\download_raw.ps1 }
+    'ingest-zones' { Invoke-MagePipeline 'ingest_zone_lookup' $null }
+    'ingest' {
+        $vars = if (-not $Arg) { '{"file_name": "ALL"}' }
+                elseif ($Arg.TrimStart().StartsWith('{')) { $Arg }
+                else { '{"file_name": "' + $Arg + '"}' }
+        Invoke-MagePipeline 'ingest_yellow_trips' $vars
+    }
     'profile' {
         if (-not $Arg) { throw 'Cần tên file, vd: .\tasks.ps1 profile 03_profile_by_vendor.sql' }
         $file = Join-Path 'sql\profiling' $Arg

@@ -1,8 +1,6 @@
 version: 0.1.1
 
+# Dùng khi tạo block SQL/IO DuckDB trên giao diện Mage. Các block ingestion hiện tại
+# kết nối trực tiếp qua mage/utils/duckdb_helpers.py.
 default:
-  POSTGRES_DBNAME: "{{ env_var('POSTGRES_DB') }}"
-  POSTGRES_USER: "{{ env_var('POSTGRES_USER') }}"
-  POSTGRES_PASSWORD: "{{ env_var('POSTGRES_PASSWORD') }}"
-  POSTGRES_HOST: "{{ env_var('POSTGRES_HOST') }}"
-  POSTGRES_PORT: "{{ env_var('POSTGRES_PORT') }}"
+  DUCKDB_DATABASE: "{{ env_var('DUCKDB_PATH') }}"
