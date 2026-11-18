@@ -4,7 +4,7 @@
 
 with minutes as (
     select h, m
-    from generate_series(0, 23) as h, generate_series(0, 59) as m
+    from range(0, 24) as hh(h), range(0, 60) as mm(m)
 )
 
 select
@@ -17,9 +17,9 @@ select
 union all
 
 select
-    h * 100 + m,
-    h,
-    m,
+    (h * 100 + m)::int,
+    h::int,
+    m::int,
     (case
         when h >= 5  and h < 12 then 'Morning'
         when h >= 12 and h < 17 then 'Afternoon'

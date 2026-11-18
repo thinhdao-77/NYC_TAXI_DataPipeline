@@ -40,7 +40,7 @@ Khi chạy `docker compose run/exec` với đường dẫn Linux từ Git Bash, 
 ## Cấu trúc
 
 - `mage/`: ingestion (pipelines `ingest_zone_lookup`, `ingest_yellow_trips`) ghi vào schema `raw` của DuckDB; helper chung ở `mage/utils/duckdb_helpers.py`, DDL ở `sql/ddl/`.
-- `dbt/`: transform chính, adapter **dbt-duckdb** (cùng file DuckDB với Mage). `sources.yml` trỏ `raw.*`; staging (`models/staging`, view trong schema `stage`) giữ đủ dòng và gắn cờ `is_*`, `is_valid_for_fact`; Dimension/Fact đọc staging bằng `ref()`. Dimension dùng SK ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`); Fact incremental theo `batch_id`.
+- `dbt/`: transform chính, adapter **dbt-duckdb** (cùng file DuckDB với Mage). `sources.yml` trỏ `raw.*`; staging (`models/staging`, view trong schema `stage`) giữ đủ dòng và gắn cờ `is_*`, `is_valid_for_fact`; Dimension/Fact đọc staging bằng `ref()`. Dimension dùng SK ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`); Fact lọc `is_valid_for_fact`, incremental `delete+insert` theo `sourcefilename` (lấy batch mới hơn `max(batchid)`), nạp lại một file không làm trùng.
 - `sql/ddl`: DDL `raw`/`control`. `sql/profiling`: truy vấn đo lỗi trên `raw.*` (chạy `.\tasks.ps1 profile <file>`). `sql/run_sql.py`: chạy SQL chỉ đọc cho `tasks.ps1 sql/profile`. `sql/warehouse`: bản SQL thủ công cũ (PostgreSQL), chỉ tham khảo.
 - `tests/run_quality_tests.py`: runner QA chỉ đọc.
 - `docs/guides/`: hướng dẫn từng phần. `docs/02_test_plans_and_logs/runs/`: log tự sinh, không commit (trừ một bản mẫu).

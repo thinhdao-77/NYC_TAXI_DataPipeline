@@ -1,6 +1,12 @@
 # BÁO CÁO CẬP NHẬT TẦNG DIMENSION (DDS) & PHẢN HỒI KIỂM THỬ
 
-> **Cập nhật 16/11/2026:** cách chạy chính hiện tại là **dbt** (`dbt/models/dds/`, lệnh `.\tasks.ps1 dbt-build`). Các lệnh `psql` trong tài liệu này dùng bản SQL thủ công ở `sql/warehouse/`, chỉ để tham khảo hoặc đối chiếu. **Không trộn hai cách** trên cùng một database: dbt build lại bảng Dimension mỗi lần chạy, nên khóa ngoại do `03_create_fact.sql` tạo sẽ bị xóa theo. Ngoài ra, SK trong dbt được sinh ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`), khác với `SERIAL` trong bản SQL.
+> **Cập nhật 18/11/2026 (DuckDB):** Dimension chạy bằng **dbt-duckdb** (`dbt/models/dds/dimensions/`, bảng `dds.dim*` trong file DuckDB). Mục 1–2 vẫn đúng về nghiệp vụ; lệnh `psql` ở mục 3 là bản PostgreSQL cũ (`sql/warehouse/`), chỉ để tham khảo. SK trong dbt sinh ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`, `TimeSK = hour*100 + minute`, `LocationSK = LocationID`), khác với `SERIAL` trong bản SQL cũ.
+>
+> Chạy: `.\tasks.ps1 dbt-build dds.dimensions` (build 8 bảng + test `unique`/`not_null` và `assert_unknown_member_exists`). Mỗi lần build tạo lại bảng (materialized `table`), nên chạy lặp luôn cho cùng kết quả.
+>
+> Chuyển từ PostgreSQL sang DuckDB: `to_char(date, 'YYYYMMDD'/'Day'/'Month')` → `strftime(date, '%Y%m%d'/'%A'/'%B')`; `generate_series(...) as h` (bảng một cột) → `range(0, 24) as hh(h)`. Hai bổ sung trên DuckDB: `DimDate` chạy tới **2026-01-31** (chuyến đón cuối 2025 trả khách sang 01/2026); `DimPassengerGroup` thêm nhóm **`NONE` (SK 0, 0–0 hành khách)** cho `passenger_count` NULL/0, Fact join bằng `coalesce(passenger_count, 0)`. Sau hai bổ sung này Fact không còn khóa `-1`.
+>
+> Kết quả 18/11/2026: `dimdate` 763 dòng (762 ngày + Unknown), `dimpassengergroup` 5, `dimtime` 1.441, `dimlocation` 266, `dimvendor` 5, `dimpaymenttype` 7, `dimratecode` 8; mọi test PASS.
 
 
 **Ngày cập nhật:** 27/10/2026  
@@ -83,7 +89,7 @@ Hệ thống hiện tại duy trì **hai lớp phòng vệ Unknown** để đả
 
 ---
 
-## 3. Hướng dẫn thực thi và kiểm thử (Idempotent Run)
+## 3. Hướng dẫn thực thi và kiểm thử trên PostgreSQL (bản cũ, tham khảo)
 
 Kịch bản dưới đây thực thi toàn bộ pipeline Dimension và tuân thủ yêu cầu bắt lỗi nghiêm ngặt (QA-4.7).
 
