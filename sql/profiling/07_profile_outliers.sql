@@ -1,4 +1,4 @@
--- KIỂM TRA GIÁ TRỊ BẤT THƯỜNG TRÊN BẢNG STAGING
+-- KIỂM TRA GIÁ TRỊ BẤT THƯỜNG TRÊN BẢNG RAW
 -- Gồm 3 phần: (1) giá trị nhỏ nhất/lớn nhất, (2) đếm dòng vượt ngưỡng,
 -- (3) đếm dòng có khoản tiền bị âm.
 -- Mỗi cột kết quả là một con số (min, max hoặc số dòng).
@@ -40,4 +40,4 @@ SELECT
   count(*) FILTER (WHERE congestion_surcharge < 0) AS congestion_am,  -- phụ phí ùn tắc âm
   count(*) FILTER (WHERE airport_fee < 0) AS airport_am,              -- phí sân bay âm
   count(*) FILTER (WHERE cbd_congestion_fee < 0) AS cbd_am            -- phí ùn tắc khu trung tâm âm
-FROM stage.stg_yellow_taxi_trips;   -- bảng staging
+FROM raw.yellow_tripdata;   -- bảng raw (dữ liệu nguồn)

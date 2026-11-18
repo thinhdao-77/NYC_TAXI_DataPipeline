@@ -1,5 +1,5 @@
 -- =====================================================================
--- THỐNG KÊ THEO TỪNG VENDOR_ID trên bảng staging
+-- THỐNG KÊ THEO TỪNG VENDOR_ID trên bảng raw
 -- Mỗi dòng kết quả = một vendor_id (kể cả NULL nếu có).
 -- Mỗi cột = số dòng thỏa một điều kiện trong vendor đó.
 -- =====================================================================
@@ -22,6 +22,6 @@ SELECT
   count(*) FILTER (WHERE fare_amount < 0)               AS fare_am,
   -- Đếm dòng có tổng tiền âm
   count(*) FILTER (WHERE total_amount < 0)              AS total_am
-FROM stage.stg_yellow_taxi_trips   -- bảng staging
+FROM raw.yellow_tripdata   -- bảng raw (dữ liệu nguồn)
 GROUP BY vendor_id                 -- gom nhóm theo vendor
 ORDER BY vendor_id;                -- sắp xếp theo mã vendor tăng dần

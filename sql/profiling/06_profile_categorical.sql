@@ -19,7 +19,7 @@ SELECT
 
   -- Số dòng có giá trị đó
   count(*) AS so_dong
-FROM stage.stg_yellow_taxi_trips   -- bảng staging
+FROM raw.yellow_tripdata   -- bảng raw (dữ liệu nguồn)
 
 -- Đếm riêng từng cột, không kết hợp các cột với nhau
 GROUP BY GROUPING SETS ((vendor_id), (ratecode_id), (payment_type),

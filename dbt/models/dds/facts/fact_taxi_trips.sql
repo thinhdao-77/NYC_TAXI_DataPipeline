@@ -42,7 +42,7 @@ SELECT
     stg.batch_id                               AS batchid,
     CURRENT_TIMESTAMP                          AS loadedat
 
-FROM {{ source('stage', 'stg_yellow_taxi_trips') }} stg
+FROM {{ ref('stg_yellow_taxi_trips') }} stg
 
 LEFT JOIN {{ ref('dim_date') }} d_pu 
     ON d_pu.fulldate = stg.tpep_pickup_datetime::date

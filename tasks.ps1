@@ -26,9 +26,8 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 # Chạy SQL (đọc từ stdin) trên file DuckDB trong container Mage, chế độ chỉ đọc.
 # DuckDB chỉ cho một tiến trình ghi: lệnh sẽ lỗi nếu dbt/Mage đang ghi vào file.
-$DuckDbQuery = "import duckdb, os, sys; con = duckdb.connect(os.environ['DUCKDB_PATH'], read_only=True); con.sql(sys.stdin.read()).show(max_rows=200)"
 function Invoke-DuckDb([string]$Sql) {
-    $Sql | docker compose exec -T mage python -c $DuckDbQuery
+    $Sql | docker compose exec -T mage python /home/src/sql/run_sql.py
 }
 
 # Chạy pipeline Mage không cần giao diện. PowerShell 5.1 làm mất dấu " khi truyền cho

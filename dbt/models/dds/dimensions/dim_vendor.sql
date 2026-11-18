@@ -4,7 +4,7 @@
 
 with codes as (
     select distinct vendor_id
-    from {{ source('stage', 'stg_yellow_taxi_trips') }}
+    from {{ ref('stg_yellow_taxi_trips') }}
     where vendor_id is not null
 )
 

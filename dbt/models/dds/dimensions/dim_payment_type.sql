@@ -4,7 +4,7 @@
 
 with codes as (
     select distinct payment_type::int as payment_type
-    from {{ source('stage', 'stg_yellow_taxi_trips') }}
+    from {{ ref('stg_yellow_taxi_trips') }}
     where payment_type is not null
 )
 

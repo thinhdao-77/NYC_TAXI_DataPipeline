@@ -30,7 +30,7 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dbt.txt
 
       - name: Python syntax check
-        run: python -m compileall -q tests mage sql/profiling
+        run: python -m compileall -q tests mage sql
 
       - name: Docker Compose config
         run: |
@@ -39,6 +39,8 @@ jobs:
 
       - name: dbt parse
         working-directory: dbt
+        # dbt parse không mở file DuckDB; trỏ đường dẫn vào thư mục tạm của runner.
         env:
-          POSTGRES_PASSWORD: ci-not-used
+          DUCKDB_PATH: ${{ runner.temp }}/ci.duckdb
+          DUCKDB_TEMP_DIR: ${{ runner.temp }}/duckdb_tmp
         run: dbt parse --profiles-dir .

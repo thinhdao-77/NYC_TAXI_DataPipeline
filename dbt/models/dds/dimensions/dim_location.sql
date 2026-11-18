@@ -4,7 +4,7 @@
 with zones as (
     select distinct on (location_id)
         location_id, borough, zone, service_zone
-    from {{ source('stage', 'stg_taxi_zone_lookup') }}
+    from {{ ref('stg_taxi_zone_lookup') }}
     where location_id is not null
     order by location_id, load_datetime desc
 )
