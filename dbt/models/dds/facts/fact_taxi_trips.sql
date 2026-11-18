@@ -62,10 +62,16 @@ LEFT JOIN {{ ref('dim_time') }} t_do
     ON t_do.hour = EXTRACT(HOUR FROM stg.tpep_dropoff_datetime)::int 
    AND t_do.minute = EXTRACT(MINUTE FROM stg.tpep_dropoff_datetime)::int
 
+-- DimLocation là SCD Type 2: chọn phiên bản có hiệu lực tại thời điểm đón (trả).
+-- Dòng Fact đã nạp giữ nguyên SK phiên bản cũ khi khu vực đổi; chuyến nạp sau dùng phiên bản mới.
 LEFT JOIN {{ ref('dim_location') }} l_pu 
     ON l_pu.locationid = stg.pu_location_id
+   AND stg.tpep_pickup_datetime >= l_pu.validfrom
+   AND stg.tpep_pickup_datetime <  l_pu.validto
 LEFT JOIN {{ ref('dim_location') }} l_do 
     ON l_do.locationid = stg.do_location_id
+   AND stg.tpep_dropoff_datetime >= l_do.validfrom
+   AND stg.tpep_dropoff_datetime <  l_do.validto
 
 LEFT JOIN {{ ref('dim_vendor') }} v 
     ON v.vendorid = stg.vendor_id

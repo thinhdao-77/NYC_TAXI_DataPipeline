@@ -1,6 +1,8 @@
 # BÁO CÁO CẬP NHẬT TẦNG DIMENSION (DDS) & PHẢN HỒI KIỂM THỬ
 
-> **Cập nhật 18/11/2026 (DuckDB):** Dimension chạy bằng **dbt-duckdb** (`dbt/models/dds/dimensions/`, bảng `dds.dim*` trong file DuckDB). Mục 1–2 vẫn đúng về nghiệp vụ; lệnh `psql` ở mục 3 là bản PostgreSQL cũ (`sql/warehouse/`), chỉ để tham khảo. SK trong dbt sinh ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`, `TimeSK = hour*100 + minute`, `LocationSK = LocationID`), khác với `SERIAL` trong bản SQL cũ.
+> **Cập nhật 18/11/2026 (DuckDB):** Dimension chạy bằng **dbt-duckdb** (`dbt/models/dds/dimensions/`, bảng `dds.dim*` trong file DuckDB). Mục 1–2 vẫn đúng về nghiệp vụ; lệnh `psql` ở mục 3 là bản PostgreSQL cũ (`sql/warehouse/`), chỉ để tham khảo. SK trong dbt sinh ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`, `TimeSK = hour*100 + minute`), khác với `SERIAL` trong bản SQL cũ.
+>
+> **DimLocation là SCD Type 2 (từ 18/11/2026, bước 5a).** Nguồn là snapshot `snapshots.snap_taxi_zone_lookup` (`dbt/snapshots/snap_taxi_zone_lookup.yml`, `strategy: check` trên `borough`, `zone`, `service_zone`). Mỗi phiên bản một dòng: `LocationSK = LocationID*100 + VersionNo` (vd 13201), `ValidFrom` (phiên bản 1 = 1900-01-01), `ValidTo` (hiện hành = 9999-12-31), `IsCurrent`. Fact tra khóa theo LocationID và giờ đón/trả nằm trong `[ValidFrom, ValidTo)`, nên khi khu vực đổi tên, chuyến đã nạp vẫn giữ phiên bản cũ. Lưu ý: `ValidFrom` của phiên bản mới là thời điểm chạy snapshot (nguồn không có ngày hiệu lực). Test: `tests/dimensions/assert_dim_location_scd2_valid.sql`. Snapshot chạy trong `dbt build` toàn bộ; nếu chỉ build `dds.dimensions` thì snapshot phải đã tồn tại.
 >
 > Chạy: `.\tasks.ps1 dbt-build dds.dimensions` (build 8 bảng + test `unique`/`not_null` và `assert_unknown_member_exists`). Mỗi lần build tạo lại bảng (materialized `table`), nên chạy lặp luôn cho cùng kết quả.
 >
