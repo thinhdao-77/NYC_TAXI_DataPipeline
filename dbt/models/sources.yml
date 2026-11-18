@@ -1,9 +1,13 @@
 version: 2
 
 sources:
-  - name: stage
-    description: "Dữ liệu nguồn do Mage nạp vào PostgreSQL (xem sql/ddl/02_create_stage.sql)."
-    schema: stage
+  - name: raw
+    description: "Dữ liệu nguồn nguyên trạng do Mage nạp vào DuckDB (DDL: sql/ddl/02_create_raw.sql)."
+    schema: raw
     tables:
-      - name: stg_yellow_taxi_trips
-      - name: stg_taxi_zone_lookup
+      - name: yellow_tripdata
+        description: "Yellow Taxi Trip Records 2024–2025, một dòng một chuyến, kèm cột kiểm toán."
+        loaded_at_field: load_datetime
+      - name: taxi_zone_lookup
+        description: "Taxi Zone Lookup (265 khu vực)."
+        loaded_at_field: load_datetime

@@ -4,7 +4,7 @@
 
 with codes as (
     select distinct coalesce(ratecode_id, 99)::int as ratecode_id
-    from {{ source('stage', 'stg_yellow_taxi_trips') }}
+    from {{ ref('stg_yellow_taxi_trips') }}
 )
 
 select

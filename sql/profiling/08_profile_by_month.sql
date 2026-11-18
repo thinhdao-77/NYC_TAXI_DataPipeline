@@ -1,4 +1,4 @@
--- THỐNG KÊ LỖI THEO TỪNG FILE NGUỒN (bảng staging)
+-- THỐNG KÊ LỖI THEO TỪNG FILE NGUỒN (bảng raw)
 -- Mỗi dòng kết quả = một file nguồn (source_file_name).
 -- Mỗi cột = số dòng thỏa một điều kiện trong file đó.
 -- Dùng để xem lỗi tập trung ở file nào.
@@ -17,6 +17,6 @@ SELECT
   count(*) FILTER (WHERE trip_distance <= 0) AS dist_le_0,
   -- Đếm dòng có giờ trả sớm hơn giờ đón
   count(*) FILTER (WHERE tpep_dropoff_datetime < tpep_pickup_datetime) AS drop_truoc
-FROM stage.stg_yellow_taxi_trips   -- bảng staging
+FROM raw.yellow_tripdata   -- bảng raw (dữ liệu nguồn)
 GROUP BY 1                         -- gom nhóm theo cột đầu tiên trong SELECT (source_file_name)
 ORDER BY 1;                        -- sắp xếp theo cột đầu tiên (source_file_name) tăng dần

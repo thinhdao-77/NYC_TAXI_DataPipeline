@@ -1,4 +1,4 @@
--- ĐẾM SỐ DÒNG NULL Ở TỪNG CỘT + KHOẢNG THỜI GIAN CỦA DỮ LIỆU (bảng staging)
+-- ĐẾM SỐ DÒNG NULL Ở TỪNG CỘT + KHOẢNG THỜI GIAN CỦA DỮ LIỆU (bảng raw)
 SELECT
   -- Tổng số dòng trong bảng
   count(*) AS tong_dong,
@@ -36,4 +36,4 @@ SELECT
   max(tpep_pickup_datetime) AS pickup_max,                      -- giờ đón muộn nhất
   min(tpep_dropoff_datetime) AS dropoff_min,                    -- giờ trả sớm nhất
   max(tpep_dropoff_datetime) AS dropoff_max                     -- giờ trả muộn nhất
-FROM stage.stg_yellow_taxi_trips;   -- bảng staging
+FROM raw.yellow_tripdata;   -- bảng raw (dữ liệu nguồn)

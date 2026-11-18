@@ -28,6 +28,6 @@ SELECT
           AND total_amount IS NULL
     ) AS fare_am_total_null
 
-FROM stage.stg_yellow_taxi_trips
+FROM raw.yellow_tripdata
 GROUP BY payment_type
 ORDER BY payment_type;

@@ -1,4 +1,4 @@
--- KIỂM TRA CHẤT LƯỢNG DỮ LIỆU TRÊN BẢNG STAGING
+-- KIỂM TRA CHẤT LƯỢNG DỮ LIỆU TRÊN BẢNG RAW
 -- Mỗi cột kết quả = số dòng thỏa một điều kiện (đếm bằng COUNT + FILTER).
 SELECT
   -- Tổng số dòng trong bảng
@@ -57,7 +57,7 @@ SELECT
   -- Đếm dòng thiếu payment_type
   count(*) FILTER (WHERE payment_type IS NULL)                    AS payment_null
 
-FROM stage.stg_yellow_taxi_trips;   -- bảng staging
+FROM raw.yellow_tripdata;   -- bảng raw (dữ liệu nguồn)
 
 
 -- Kiểm chứng 5 cột NULL có trùng đúng tập payment_type = 0
@@ -125,4 +125,4 @@ SELECT
           )
     ) AS khong_flex_nhung_co_null
 
-FROM stage.stg_yellow_taxi_trips;
+FROM raw.yellow_tripdata;
