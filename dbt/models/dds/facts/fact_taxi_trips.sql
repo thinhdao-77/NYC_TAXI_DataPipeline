@@ -1,6 +1,12 @@
+-- FactTaxiTrip: mỗi dòng là một chuyến đi hợp lệ (stg.is_valid_for_fact).
+-- Incremental delete+insert theo file nguồn: lượt chạy sau chỉ lấy batch mới hơn batch lớn nhất
+-- đã có trong Fact; nếu một file được nạp lại (batch mới), toàn bộ dòng cũ của file đó bị xóa rồi
+-- chèn lại, nên Fact không bị trùng.
 {{
     config(
         materialized='incremental',
+        incremental_strategy='delete+insert',
+        unique_key='sourcefilename',
         schema='dds',
         alias='facttaxitrip'
     )
@@ -25,7 +31,7 @@ SELECT
     1                                          AS totaltrips,
     COALESCE(stg.passenger_count, 0)           AS passengercount,
     stg.trip_distance                          AS tripdistance,
-    ROUND(EXTRACT(EPOCH FROM (stg.tpep_dropoff_datetime - stg.tpep_pickup_datetime)) / 60.0, 2) AS tripdurationminutes,
+    ROUND(stg.trip_duration_minutes, 2)        AS tripdurationminutes,
     stg.fare_amount                            AS fareamount,
     COALESCE(stg.extra, 0)                     AS extra,
     COALESCE(stg.mta_tax, 0)                   AS mtatax,
@@ -71,17 +77,13 @@ LEFT JOIN {{ ref('dim_rate_code') }} r
     ON r.ratecodeid = COALESCE(stg.ratecode_id, 99)
 
 LEFT JOIN {{ ref('dim_passenger_group') }} pg 
-    ON stg.passenger_count BETWEEN pg.minpassengers AND pg.maxpassengers
+    ON COALESCE(stg.passenger_count, 0) BETWEEN pg.minpassengers AND pg.maxpassengers
 
 LEFT JOIN {{ ref('dim_distance_group') }} dg 
     ON stg.trip_distance BETWEEN dg.mindistance AND dg.maxdistance
 
-WHERE stg.tpep_dropoff_datetime > stg.tpep_pickup_datetime
-  AND stg.tpep_pickup_datetime >= '2024-01-01'
-  AND stg.tpep_pickup_datetime < '2026-01-01'
-  AND stg.fare_amount >= 0
-  AND stg.total_amount >= 0
-  AND stg.trip_distance >= 0
+-- Điều kiện giữ dòng định nghĩa một chỗ trong staging (stg_yellow_taxi_trips.is_valid_for_fact).
+WHERE stg.is_valid_for_fact
 {% if is_incremental() %}
   AND stg.batch_id > (SELECT COALESCE(MAX(batchid), 0) FROM {{ this }})
 {% endif %}

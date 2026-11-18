@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: dim_date
-    description: "Ngày 2024-2025. DateSK = YYYYMMDD; -1 = Unknown."
+    description: "Ngày 2024-01-01 .. 2026-01-31 (gồm ngày trả khách sang 2026). DateSK = YYYYMMDD; -1 = Unknown."
     columns:
       - name: datesk
         data_tests: [unique, not_null]
@@ -48,7 +48,7 @@ models:
         data_tests: [unique, not_null]
 
   - name: dim_passenger_group
-    description: "Nhóm số hành khách (tĩnh)."
+    description: "Nhóm số hành khách (tĩnh). SK 0 = NONE (0 hoặc NULL hành khách); -1 = Unknown."
     columns:
       - name: passengergroupsk
         data_tests: [unique, not_null]

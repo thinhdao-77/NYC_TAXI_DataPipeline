@@ -1,6 +1,6 @@
 # NYC TAXI - HƯỚNG DẪN TRIỂN KHAI & BÀN GIAO TẦNG FACT (DDS)
 
-> **Cập nhật 16/11/2026:** cách chạy chính hiện tại là **dbt** (`dbt/models/dds/`, lệnh `.\tasks.ps1 dbt-build`). Các lệnh `psql` trong tài liệu này dùng bản SQL thủ công ở `sql/warehouse/`, chỉ để tham khảo hoặc đối chiếu. **Không trộn hai cách** trên cùng một database: dbt build lại bảng Dimension mỗi lần chạy, nên khóa ngoại do `03_create_fact.sql` tạo sẽ bị xóa theo. Ngoài ra, SK trong dbt được sinh ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`), khác với `SERIAL` trong bản SQL.
+> **Cập nhật 18/11/2026 (DuckDB):** Fact chạy bằng **dbt-duckdb** trên cùng file DuckDB với Mage (`data/warehouse/nyc_taxi.duckdb`, bảng `dds.facttaxitrip`), xem [mục 0](#0-chạy-trên-duckdb-dbt). Các mục 3 và 5 bên dưới mô tả bản PostgreSQL cũ (lệnh `psql`, bản SQL thủ công ở `sql/warehouse/`), giữ lại để tham khảo; PostgreSQL không còn trong `docker-compose.yml`. SK trong dbt sinh ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`), khác với `SERIAL` trong bản SQL cũ.
 
 
 Tài liệu này mô tả chi tiết thiết kế, quy tắc làm sạch dữ liệu, quy trình ETL và kịch bản kiểm thử nghiệm thu cho bảng dữ kiện trung tâm **`dds.FactTaxiTrip`** thuộc mô hình kho dữ liệu NYC Yellow Taxi (Star Schema).
@@ -8,8 +8,53 @@ Tài liệu này mô tả chi tiết thiết kế, quy tắc làm sạch dữ li
 - **Người phụ trách:** Thịnh (Người 3 - Tầng Fact)
 - **Nguồn dữ liệu:** `stage.stg_yellow_taxi_trips` (do Vân nạp) kết hợp 8 bảng Dimension trong `dds` (do Khoa tạo).
 - **Căn cứ thiết kế:** Tuân thủ 100% tài liệu `modeling.pdf` (Trang 3–6) và phân công `Giai đoạn 1 NYC Yellow Taxi Trip.pdf`.
-- **Đích đến:** `dds.FactTaxiTrip` (PostgreSQL) và model dbt `dbt/models/dds/facts/fact_taxi_trips.sql`.
+- **Đích đến:** model dbt `dbt/models/dds/facts/fact_taxi_trips.sql` → `dds.facttaxitrip` (DuckDB). Trước 18/11/2026: `dds.FactTaxiTrip` trên PostgreSQL.
 - **Đối tượng bàn giao:** Bee (Người 4 - QA/Tester), Tuấn (Tổng hợp báo cáo), và người làm Power BI / OLAP tiếp theo.
+
+---
+
+## 0. Chạy trên DuckDB (dbt)
+
+| Mục | Giá trị |
+| :--- | :--- |
+| Model | `dbt/models/dds/facts/fact_taxi_trips.sql` → bảng `dds.facttaxitrip` |
+| Nguồn | `ref('stg_yellow_taxi_trips')` (view staging) + 8 Dimension qua `ref()` |
+| Điều kiện giữ dòng | `stg.is_valid_for_fact` (định nghĩa một chỗ trong staging, xem [staging.md](staging.md)) |
+| Materialization | `incremental`, `incremental_strategy='delete+insert'`, `unique_key='sourcefilename'` |
+| Lọc incremental | `stg.batch_id > max(batchid)` đã có trong Fact |
+
+**Cơ chế nạp (mục 4a trong PROJECT_STATUS):**
+- Lần đầu (hoặc `--full-refresh`): tạo bảng từ toàn bộ staging hợp lệ.
+- Lần sau: chỉ lấy dòng có `batch_id` mới hơn batch lớn nhất trong Fact. Với các file trong lô mới, dbt **xóa mọi dòng Fact của file đó** rồi chèn lại. Nhờ vậy:
+  - không có dữ liệu mới → không thay đổi gì (chạy 0,3 s);
+  - nạp thêm file mới → chỉ chèn file đó;
+  - **nạp lại một file đã có** (Mage thay dòng raw của file bằng batch mới) → dòng Fact cũ của file bị thay, **không trùng**.
+- Giới hạn: file bị xóa hẳn khỏi raw thì dòng Fact cũ vẫn còn (test `assert_fact_matches_staging` sẽ báo); chạy `--full-refresh` để dựng lại.
+
+```powershell
+.\tasks.ps1 dbt-build dds                       # build 8 Dimension + Fact + test
+.\tasks.ps1 dbt-build fact_taxi_trips           # chỉ Fact (incremental) + test
+docker compose exec -T -w /home/src/dbt mage dbt build --select fact_taxi_trips --full-refresh --profiles-dir .
+```
+
+**Test** (`dbt/models/dds/facts/schema.yml`, `dbt/tests/facts/`): `not_null` và `relationships` cho các khóa SK; `assert_fact_matches_staging` so số dòng Fact theo từng file với số dòng staging có `is_valid_for_fact` (bắt nạp trùng, mất dòng do join, file thiếu hoặc thừa).
+
+**Kết quả 18/11/2026 trên 24 tháng (2024-01 → 2025-12):**
+
+| Chỉ số | Giá trị |
+| :--- | ---: |
+| Dòng staging | 89.892.322 |
+| Dòng Fact (`is_valid_for_fact`) | **85.745.246 (95,39%)** |
+| Build đầy đủ | 94–137 s (bộ nhớ container < 1 GB sau build) |
+| Incremental, không có dữ liệu mới | 0,3 s |
+| Incremental sau khi nạp lại file 2024-01 | 7 s, tổng dòng không đổi, file 2024-01 mang batch mới |
+| Test Fact | 18/18 PASS |
+
+Khóa Unknown (`-1`) trong Fact: **0 dòng ở mọi khóa**. Hai trường hợp đặc biệt được xử lý trong Dimension:
+- 759 chuyến đón cuối 2025 nhưng trả khách trong 01/2026 (muộn nhất 05/01/2026): `DimDate` kéo dài tới 2026-01-31 nên `DropoffDateSK` vẫn có ngày.
+- 14.181.248 chuyến có `passenger_count` NULL (13,53 triệu, chủ yếu Flex Fare) hoặc 0 (0,66 triệu): gán nhóm `NONE` (`PassengerGroupSK = 0`), Fact join bằng `coalesce(passenger_count, 0)`.
+
+Lưu ý Power BI: `DimDate` có tháng 01/2026 nhưng không có chuyến nào **đón** trong tháng đó; lọc theo `PickupDateSK` sẽ không thấy dữ liệu 2026.
 
 ---
 
@@ -19,7 +64,7 @@ Tài liệu này mô tả chi tiết thiết kế, quy tắc làm sạch dữ li
 Mỗi dòng trong bảng `dds.FactTaxiTrip` biểu diễn **một chuyến đi taxi đơn lẻ đã hoàn thành** được ghi nhận trên hệ thống đồng hồ tính cước của xe Yellow Taxi.
 
 ### 1.2. Danh sách Khóa ngoại (11 Foreign Keys tới 8 Dimension)
-Toàn bộ khóa ngoại tham chiếu đến khóa Surrogate Key (`SERIAL`) của 8 bảng Dimension. Cơ chế ETL sử dụng `LEFT JOIN` và bọc hàm `COALESCE(dim.SK, -1)` để bảo toàn 100% doanh thu, đưa các bản ghi mồ côi hoặc thiếu thông tin về dòng mặc định `-1 (Unknown)`.
+Toàn bộ khóa ngoại tham chiếu đến Surrogate Key của 8 bảng Dimension (trong dbt: SK ổn định sinh từ khóa tự nhiên). Cơ chế ETL sử dụng `LEFT JOIN` và bọc hàm `COALESCE(dim.SK, -1)` để bảo toàn 100% doanh thu, đưa các bản ghi mồ côi hoặc thiếu thông tin về dòng mặc định `-1 (Unknown)`.
 
 | Tên cột Foreign Key | Kiểu | Bảng Dimension tham chiếu | Khóa tự nhiên nguồn | Ghi chú nghiệp vụ |
 | :--- | :--- | :--- | :--- | :--- |
@@ -32,7 +77,7 @@ Toàn bộ khóa ngoại tham chiếu đến khóa Surrogate Key (`SERIAL`) củ
 | `VendorSK` | INT | `dds.DimVendor(VendorSK)` | `vendor_id` | Hãng xe (CMT / VTS) |
 | `PaymentTypeSK` | INT | `dds.DimPaymentType(PaymentTypeSK)` | `payment_type` | Thẻ tín dụng, tiền mặt,... |
 | `RateCodeSK` | INT | `dds.DimRateCode(RateCodeSK)` | `COALESCE(ratecode_id, 99)` | Tiêu chuẩn, JFK, Newark,... |
-| `PassengerGroupSK`| INT | `dds.DimPassengerGroup(PassengerGroupSK)` | `passenger_count` | 1 người, 2-4 người, 5+ |
+| `PassengerGroupSK`| INT | `dds.DimPassengerGroup(PassengerGroupSK)` | `coalesce(passenger_count, 0)` | Không ghi nhận (0/NULL), 1 người, 2-4 người, 5+ |
 | `DistanceGroupSK` | INT | `dds.DimDistanceGroup(DistanceGroupSK)` | `trip_distance` | <2mi, 2-5mi, >5mi |
 
 ### 1.3. Base Measures vật lý (Lưu trực tiếp trong Fact - Additive Measures)
@@ -78,7 +123,7 @@ Theo trang 4 của `modeling.pdf`, các measures phái sinh sau được định
 
 ## 2. Quy tắc Làm sạch Dữ liệu (ETL Data Quality Rules)
 
-Trong quá trình nạp từ `stage.stg_yellow_taxi_trips` sang `dds.FactTaxiTrip`, các bản ghi vi phạm các điều kiện sau sẽ bị loại bỏ:
+Trong quá trình nạp từ `stage.stg_yellow_taxi_trips` sang Fact, các bản ghi vi phạm các điều kiện sau sẽ bị loại bỏ. Từ 18/11/2026 các điều kiện này được tính một lần trong staging thành cờ `is_valid_for_fact`; Fact chỉ lọc `WHERE stg.is_valid_for_fact`:
 1. **Lỗi thời gian di chuyển:** `tpep_dropoff_datetime <= tpep_pickup_datetime` (thời lượng chuyến đi $\le 0$).
 2. **Ngoài phạm vi nghiên cứu:** Chuyến đi có giờ đón trước `2024-01-01` hoặc từ `2026-01-01` trở đi.
 3. **Lỗi tài chính âm:** `fare_amount < 0` hoặc `total_amount < 0` (các giao dịch tranh chấp, hủy cước, hoàn tiền).
@@ -86,7 +131,7 @@ Trong quá trình nạp từ `stage.stg_yellow_taxi_trips` sang `dds.FactTaxiTri
 
 ---
 
-## 3. Quy trình Nạp Gia tăng & Hướng dẫn Thực thi (Incremental Load)
+## 3. Quy trình Nạp Gia tăng trên PostgreSQL (bản cũ, tham khảo)
 
 Quy trình nạp Fact được nâng cấp toàn diện theo kiến trúc **Incremental Load (Nạp gia tăng)** bảo toàn giao dịch (`BEGIN ... COMMIT`), hoàn toàn không sử dụng lệnh `TRUNCATE` hay `DROP` phá hủy bảng:
 1. **Lần chạy đầu tiên (Initial Load):** Bảng Fact chưa có dữ liệu, toàn bộ dữ liệu hợp lệ từ Staging sẽ được nạp vào Fact.
@@ -115,21 +160,21 @@ Get-Content sql\warehouse\05_verify_fact.sql | docker compose exec -T postgres p
 
 ## 4. Tích hợp dbt (Data Build Tool)
 
-Dự án đã được cấu hình sẵn sàng cho dbt trong thư mục `dbt/`:
+Cách chạy hiện tại xem [mục 0](#0-chạy-trên-duckdb-dbt). Cấu trúc trong thư mục `dbt/`:
 - **File cấu hình:** `dbt/dbt_project.yml` và `dbt/profiles.yml`.
 - **Macro xử lý schema:** `dbt/macros/generate_schema_name.sql` (giữ đúng schema `dds`).
 - **Model Fact:** `dbt/models/dds/facts/fact_taxi_trips.sql`.
-- **Tests tự động:** `dbt/models/dds/facts/schema.yml` (kiểm tra `not_null` và `relationships` toàn vẹn khóa ngoại).
+- **Tests tự động:** `dbt/models/dds/facts/schema.yml` (`not_null`, `relationships`) và `dbt/tests/facts/assert_fact_matches_staging.sql`.
 
 Chạy kiểm thử dbt:
 ```powershell
-docker compose exec -T mage dbt test --project-dir /home/src/dbt --profiles-dir /home/src/dbt
+.\tasks.ps1 dbt-test fact_taxi_trips
 ```
-*Kết quả:* `Done. PASS=16 WARN=0 ERROR=0 SKIP=0 TOTAL=16`
+*Kết quả 18/11/2026 (DuckDB, 24 tháng):* `Done. PASS=18 WARN=0 ERROR=0`
 
 ---
 
-## 5. Thông tin Bàn giao Kiểm thử (Dành cho Bee & Tuấn)
+## 5. Thông tin Bàn giao Kiểm thử (Dành cho Bee & Tuấn) — số liệu PostgreSQL cũ, xem mục 0 cho số liệu DuckDB
 
 Dưới đây là các tiêu chuẩn nghiệm thu và kết quả đo đạc thực tế để Bee đưa vào **Test Plan** và Tuấn đưa vào **Báo cáo**:
 
