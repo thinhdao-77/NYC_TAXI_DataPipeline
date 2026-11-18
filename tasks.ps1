@@ -58,7 +58,8 @@ Tasks:
   profile <file.sql>                Chạy một truy vấn trong sql/profiling
   dbt-deps | dbt-run | dbt-test | dbt-build [selector]
                                     Chạy dbt trong container Mage (vd: dbt-build dim_vendor)
-  qa [smoke|deep|all]               Chạy runner QA chỉ đọc (mặc định smoke)
+  qa [preflight|smoke|deep|all|full]
+                                    Runner QA chỉ đọc trên DuckDB (mặc định smoke; full = all + quét lớn)
   prune-branches                    Xóa nhánh local mà nhánh remote đã bị xóa (sau khi merge PR)
 '@
     }
@@ -90,8 +91,11 @@ Tasks:
     'dbt-test'  { if ($Arg) { Invoke-Dbt @('test', '--select', $Arg) } else { Invoke-Dbt @('test') } }
     'dbt-build' { if ($Arg) { Invoke-Dbt @('build', '--select', $Arg) } else { Invoke-Dbt @('build') } }
     'qa' {
+        # Runner chạy trong container Mage (có thư viện duckdb), mở file DuckDB ở chế độ read_only.
+        # full = suite all + các kiểm tra quét toàn bộ staging/Fact.
         $suite = if ($Arg) { $Arg } else { 'smoke' }
-        python tests\run_quality_tests.py --suite $suite
+        $qaArgs = if ($suite -eq 'full') { @('--suite', 'all', '--include-large-scans') } else { @('--suite', $suite) }
+        docker compose exec -T mage python /home/src/tests/run_quality_tests.py @qaArgs
     }
     'prune-branches' {
         git fetch --prune origin

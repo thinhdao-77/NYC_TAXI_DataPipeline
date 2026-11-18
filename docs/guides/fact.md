@@ -45,7 +45,7 @@ docker compose exec -T -w /home/src/dbt mage dbt build --select fact_taxi_trips 
 | :--- | ---: |
 | Dòng staging | 89.892.322 |
 | Dòng Fact (`is_valid_for_fact`) | **85.745.246 (95,39%)** |
-| Build đầy đủ | 94–137 s (bộ nhớ container < 1 GB sau build) |
+| Build đầy đủ | 94–137 s (bộ nhớ container < 1 GB sau build); 116 s sau khi thêm SCD2 cho Location |
 | Incremental, không có dữ liệu mới | 0,3 s |
 | Incremental sau khi nạp lại file 2024-01 | 7 s, tổng dòng không đổi, file 2024-01 mang batch mới |
 | Test Fact | 18/18 PASS |
@@ -72,8 +72,8 @@ Toàn bộ khóa ngoại tham chiếu đến Surrogate Key của 8 bảng Dimens
 | `DropoffDateSK` | INT | `dds.DimDate(DateSK)` | `tpep_dropoff_datetime::date` | Ngày trả khách |
 | `PickupTimeSK` | INT | `dds.DimTime(TimeSK)` | `pickup (hour, minute)` | Khung giờ đón khách |
 | `DropoffTimeSK` | INT | `dds.DimTime(TimeSK)` | `dropoff (hour, minute)` | Khung giờ trả khách |
-| `PickupLocationSK` | INT | `dds.DimLocation(LocationSK)` | `pu_location_id` | Điểm đón (Taxi Zone) |
-| `DropoffLocationSK`| INT | `dds.DimLocation(LocationSK)` | `do_location_id` | Điểm trả (Taxi Zone) |
+| `PickupLocationSK` | INT | `dds.DimLocation(LocationSK)` | `pu_location_id` + giờ đón trong `[ValidFrom, ValidTo)` (SCD2) | Điểm đón (Taxi Zone) |
+| `DropoffLocationSK`| INT | `dds.DimLocation(LocationSK)` | `do_location_id` + giờ trả trong `[ValidFrom, ValidTo)` (SCD2) | Điểm trả (Taxi Zone) |
 | `VendorSK` | INT | `dds.DimVendor(VendorSK)` | `vendor_id` | Hãng xe (CMT / VTS) |
 | `PaymentTypeSK` | INT | `dds.DimPaymentType(PaymentTypeSK)` | `payment_type` | Thẻ tín dụng, tiền mặt,... |
 | `RateCodeSK` | INT | `dds.DimRateCode(RateCodeSK)` | `COALESCE(ratecode_id, 99)` | Tiêu chuẩn, JFK, Newark,... |

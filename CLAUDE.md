@@ -32,7 +32,7 @@ Kho dữ liệu NYC Yellow Taxi 2024–2025, dự án cá nhân cho CV. Pipeline
 .\tasks.ps1 up                   # docker compose up -d --build
 .\tasks.ps1 sql "show all tables" # truy vấn DuckDB chỉ đọc
 .\tasks.ps1 dbt-build [selector]  # dbt trong container
-.\tasks.ps1 qa smoke              # runner QA (chưa chuyển sang DuckDB)
+.\tasks.ps1 qa full               # runner QA chỉ đọc trên DuckDB (smoke | deep | all | full)
 ```
 
 Khi chạy `docker compose run/exec` với đường dẫn Linux từ Git Bash, đặt `MSYS_NO_PATHCONV=1` để Git Bash không đổi `/home/src/...` thành đường dẫn Windows.
@@ -40,9 +40,9 @@ Khi chạy `docker compose run/exec` với đường dẫn Linux từ Git Bash, 
 ## Cấu trúc
 
 - `mage/`: ingestion (pipelines `ingest_zone_lookup`, `ingest_yellow_trips`) ghi vào schema `raw` của DuckDB; helper chung ở `mage/utils/duckdb_helpers.py`, DDL ở `sql/ddl/`.
-- `dbt/`: transform chính, adapter **dbt-duckdb** (cùng file DuckDB với Mage). `sources.yml` trỏ `raw.*`; staging (`models/staging`, view trong schema `stage`) giữ đủ dòng và gắn cờ `is_*`, `is_valid_for_fact`; Dimension/Fact đọc staging bằng `ref()`. Dimension dùng SK ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`); Fact lọc `is_valid_for_fact`, incremental `delete+insert` theo `sourcefilename` (lấy batch mới hơn `max(batchid)`), nạp lại một file không làm trùng.
+- `dbt/`: transform chính, adapter **dbt-duckdb** (cùng file DuckDB với Mage). `sources.yml` trỏ `raw.*`; staging (`models/staging`, view trong schema `stage`) giữ đủ dòng và gắn cờ `is_*`, `is_valid_for_fact`; Dimension/Fact đọc staging bằng `ref()`. Dimension dùng SK ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`); `dim_location` là SCD Type 2 từ snapshot `snap_taxi_zone_lookup` (SK = `LocationID*100 + VersionNo`, Fact tra theo khoảng hiệu lực). Fact lọc `is_valid_for_fact`, incremental `delete+insert` theo `sourcefilename` (lấy batch mới hơn `max(batchid)`), nạp lại một file không làm trùng. OLAP mart (`models/olap_marts`, schema `olap`) dùng macro `olap_trip_measures`, chỉ lưu tổng cộng dồn được.
 - `sql/ddl`: DDL `raw`/`control`. `sql/profiling`: truy vấn đo lỗi trên `raw.*` (chạy `.\tasks.ps1 profile <file>`). `sql/run_sql.py`: chạy SQL chỉ đọc cho `tasks.ps1 sql/profile`. `sql/warehouse`: bản SQL thủ công cũ (PostgreSQL), chỉ tham khảo.
-- `tests/run_quality_tests.py`: runner QA chỉ đọc.
+- `tests/run_quality_tests.py`: runner QA chỉ đọc trên DuckDB (`duckdb.connect(read_only=True)`), chạy trong container qua `.\tasks.ps1 qa`; không chạy được khi Mage/dbt đang ghi.
 - `docs/guides/`: hướng dẫn từng phần. `docs/02_test_plans_and_logs/runs/`: log tự sinh, không commit (trừ một bản mẫu).
 
 ## Lưu ý về CI

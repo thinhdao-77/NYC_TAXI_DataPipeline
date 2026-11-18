@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
-"""Read-only preflight, smoke, and deep checks for the NYC Taxi PostgreSQL repo.
+"""Runner QA chỉ đọc cho kho dữ liệu NYC Taxi trên DuckDB.
 
-Run inside the Mage container so the existing psycopg2 dependency and Compose
-environment are reused:
+Chạy trong container Mage (có sẵn thư viện duckdb, cùng phiên bản với file dữ liệu):
   docker compose exec -T mage python /home/src/tests/run_quality_tests.py --suite smoke
+hoặc từ máy host:
+  .\\tasks.ps1 qa [preflight|smoke|deep|all|full]
 
-No ETL/DDL/DML scripts are invoked. The database connection is read-only.
+Các suite:
+  static     chỉ kiểm tra file trong repo (không mở database)
+  preflight  static + mở database ở chế độ read_only
+  smoke      preflight + mỗi bảng/view tồn tại, đọc được, có dữ liệu
+  deep       smoke + kiểm tra hợp đồng schema, đối chiếu số dòng, khóa, SCD2, mart
+  all        như deep
+Thêm --include-large-scans để chạy các kiểm tra quét toàn bộ staging/Fact (vài chục giây).
+
+Runner KHÔNG chạy ETL, DDL hay DML: database mở bằng duckdb.connect(read_only=True),
+mọi lệnh ghi sẽ bị DuckDB từ chối. Kết quả lưu ở docs/02_test_plans_and_logs/runs/.
+Mã thoát: 0 = không có FAIL/BLOCKED, 1 = có FAIL, 2 = có BLOCKED.
 """
 
 from __future__ import annotations
@@ -13,71 +24,107 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from shutil import which
 from typing import Any, Callable
-
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "docs" / "02_test_plans_and_logs" / "runs"
+DEFAULT_DB = ROOT / "data" / "warehouse" / "nyc_taxi.duckdb"
+STATUSES = ["PASS", "FAIL", "BLOCKED", "NOT RUN", "NOT APPLICABLE"]
+
 REQUIRED_FILES = [
     "docker-compose.yml",
+    "Dockerfile",
+    "requirements.txt",
+    "requirements-dbt.txt",
     "mage/io_config.yaml",
+    "mage/utils/duckdb_helpers.py",
     "mage/data_exporters/load_trips_to_raw.py",
     "mage/data_loaders/load_zone_lookup.py",
     "mage/data_exporters/export_zone_lookup.py",
+    "sql/ddl/01_init_schemas.sql",
     "sql/ddl/02_create_raw.sql",
-    "sql/warehouse/01_create_dimensions.sql",
-    "sql/warehouse/02_load_dimensions.sql",
-    "sql/profiling/02_profile_errors.sql",
+    "dbt/dbt_project.yml",
+    "dbt/profiles.yml",
+    "dbt/models/sources.yml",
+    "dbt/models/staging/stg_yellow_taxi_trips.sql",
+    "dbt/models/staging/stg_taxi_zone_lookup.sql",
+    "dbt/snapshots/snap_taxi_zone_lookup.yml",
+    "dbt/models/dds/facts/fact_taxi_trips.sql",
+    "data/reference/taxi_zone_lookup.csv",
 ]
-REQUIRED_ENV = ["POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_HOST", "POSTGRES_PORT"]
-STAGE_TABLES = [
-    "stage.stg_yellow_taxi_trips",
-    "stage.stg_taxi_zone_lookup",
-    "control.etl_control",
-]
+
+# Hợp đồng schema tầng raw (theo sql/ddl/02_create_raw.sql, kiểu DuckDB).
+RAW_CONTRACT = {
+    "raw.yellow_tripdata": {
+        "vendor_id": "INTEGER", "tpep_pickup_datetime": "TIMESTAMP", "tpep_dropoff_datetime": "TIMESTAMP",
+        "passenger_count": "BIGINT", "trip_distance": "DOUBLE", "ratecode_id": "BIGINT",
+        "store_and_fwd_flag": "VARCHAR", "pu_location_id": "INTEGER", "do_location_id": "INTEGER",
+        "payment_type": "BIGINT", "fare_amount": "DOUBLE", "extra": "DOUBLE", "mta_tax": "DOUBLE",
+        "tip_amount": "DOUBLE", "tolls_amount": "DOUBLE", "improvement_surcharge": "DOUBLE",
+        "total_amount": "DOUBLE", "congestion_surcharge": "DOUBLE", "airport_fee": "DOUBLE",
+        "cbd_congestion_fee": "DOUBLE", "source_file_name": "VARCHAR", "source_row_number": "BIGINT",
+        "batch_id": "BIGINT", "load_datetime": "TIMESTAMP",
+    },
+    "raw.taxi_zone_lookup": {
+        "location_id": "INTEGER", "borough": "VARCHAR", "zone": "VARCHAR", "service_zone": "VARCHAR",
+        "source_file_name": "VARCHAR", "batch_id": "BIGINT", "load_datetime": "TIMESTAMP",
+    },
+}
+# Cột kiểm toán bắt buộc NOT NULL theo DDL.
+RAW_NOT_NULL = [("raw.yellow_tripdata", "source_file_name"), ("raw.yellow_tripdata", "load_datetime"),
+                ("raw.taxi_zone_lookup", "source_file_name"), ("raw.taxi_zone_lookup", "load_datetime")]
+
+RELATIONS = {
+    "raw": ["raw.yellow_tripdata", "raw.taxi_zone_lookup", "control.etl_control"],
+    "stage": ["stage.stg_yellow_taxi_trips", "stage.stg_taxi_zone_lookup"],
+    "snapshot": ["snapshots.snap_taxi_zone_lookup"],
+    "fact": ["dds.facttaxitrip"],
+    "olap": ["olap.mart_trips_daily", "olap.mart_hourly_activity", "olap.mart_routes_monthly",
+             "olap.mart_trip_profile", "olap.mart_monthly_kpi"],
+}
 
 DIMENSIONS = [
-    {
-        "table": "dds.DimDate", "db_name": "dimdate", "name": "DimDate", "sk": "datesk", "natural": ["fulldate"],
-        "cols": ["datesk", "fulldate", "day", "dayofweek", "dayname", "weekofyear", "month", "monthname", "quarter", "year"],
-        "expected_count": 732, "source": None,
-    },
-    {
-        "table": "dds.DimTime", "db_name": "dimtime", "name": "DimTime", "sk": "timesk", "natural": ["hour", "minute"],
-        "cols": ["timesk", "hour", "minute", "timeofday", "timeslot"], "expected_count": 1441, "source": None,
-    },
-    {
-        "table": "dds.DimLocation", "db_name": "dimlocation", "name": "DimLocation", "sk": "locationsk", "natural": ["locationid"],
-        "cols": ["locationsk", "locationid", "borough", "zone", "servicezone"], "expected_count": None, "source": "location",
-    },
-    {
-        "table": "dds.DimVendor", "db_name": "dimvendor", "name": "DimVendor", "sk": "vendorsk", "natural": ["vendorid"],
-        "cols": ["vendorsk", "vendorid", "vendorname"], "expected_count": None, "source": "vendor",
-    },
-    {
-        "table": "dds.DimPaymentType", "db_name": "dimpaymenttype", "name": "DimPaymentType", "sk": "paymenttypesk", "natural": ["paymenttypeid"],
-        "cols": ["paymenttypesk", "paymenttypeid", "paymenttypename"], "expected_count": None, "source": "payment",
-    },
-    {
-        "table": "dds.DimRateCode", "db_name": "dimratecode", "name": "DimRateCode", "sk": "ratecodesk", "natural": ["ratecodeid"],
-        "cols": ["ratecodesk", "ratecodeid", "ratecodename"], "expected_count": None, "source": "ratecode",
-    },
-    {
-        "table": "dds.DimPassengerGroup", "db_name": "dimpassengergroup", "name": "DimPassengerGroup", "sk": "passengergroupsk", "natural": ["passengergroupcode"],
-        "cols": ["passengergroupsk", "passengergroupcode", "passengergroupname", "minpassengers", "maxpassengers"], "expected_count": 4, "source": None,
-    },
-    {
-        "table": "dds.DimDistanceGroup", "db_name": "dimdistancegroup", "name": "DimDistanceGroup", "sk": "distancegroupsk", "natural": ["distancegroupcode"],
-        "cols": ["distancegroupsk", "distancegroupcode", "distancegroupname", "mindistance", "maxdistance"], "expected_count": 4, "source": None,
-    },
+    {"name": "DimDate", "table": "dds.dimdate", "sk": "datesk", "natural": ["fulldate"],
+     "cols": ["datesk", "fulldate", "day", "dayofweek", "dayname", "weekofyear", "month", "monthname", "quarter", "year"],
+     "expected_count": 763},  # 2024-01-01 .. 2026-01-31 + Unknown
+    {"name": "DimTime", "table": "dds.dimtime", "sk": "timesk", "natural": ["hour", "minute"],
+     "cols": ["timesk", "hour", "minute", "timeofday", "timeslot"], "expected_count": 1441},
+    {"name": "DimLocation", "table": "dds.dimlocation", "sk": "locationsk", "natural": ["locationid", "versionno"],
+     "cols": ["locationsk", "locationid", "borough", "zone", "servicezone", "versionno", "validfrom", "validto", "iscurrent"],
+     "expected_count": None},
+    {"name": "DimVendor", "table": "dds.dimvendor", "sk": "vendorsk", "natural": ["vendorid"],
+     "cols": ["vendorsk", "vendorid", "vendorname"], "expected_count": None},
+    {"name": "DimPaymentType", "table": "dds.dimpaymenttype", "sk": "paymenttypesk", "natural": ["paymenttypeid"],
+     "cols": ["paymenttypesk", "paymenttypeid", "paymenttypename"], "expected_count": None},
+    {"name": "DimRateCode", "table": "dds.dimratecode", "sk": "ratecodesk", "natural": ["ratecodeid"],
+     "cols": ["ratecodesk", "ratecodeid", "ratecodename"], "expected_count": None},
+    {"name": "DimPassengerGroup", "table": "dds.dimpassengergroup", "sk": "passengergroupsk", "natural": ["passengergroupcode"],
+     "cols": ["passengergroupsk", "passengergroupcode", "passengergroupname", "minpassengers", "maxpassengers"],
+     "expected_count": 5},  # Unknown, NONE, SINGLE, SMALL, LARGE
+    {"name": "DimDistanceGroup", "table": "dds.dimdistancegroup", "sk": "distancegroupsk", "natural": ["distancegroupcode"],
+     "cols": ["distancegroupsk", "distancegroupcode", "distancegroupname", "mindistance", "maxdistance"],
+     "expected_count": 4},
 ]
 
+# Khóa ngoại của Fact -> (bảng Dimension, cột SK).
+FACT_KEYS = {
+    "pickupdatesk": ("dds.dimdate", "datesk"), "dropoffdatesk": ("dds.dimdate", "datesk"),
+    "pickuptimesk": ("dds.dimtime", "timesk"), "dropofftimesk": ("dds.dimtime", "timesk"),
+    "pickuplocationsk": ("dds.dimlocation", "locationsk"), "dropofflocationsk": ("dds.dimlocation", "locationsk"),
+    "vendorsk": ("dds.dimvendor", "vendorsk"), "paymenttypesk": ("dds.dimpaymenttype", "paymenttypesk"),
+    "ratecodesk": ("dds.dimratecode", "ratecodesk"), "passengergroupsk": ("dds.dimpassengergroup", "passengergroupsk"),
+    "distancegroupsk": ("dds.dimdistancegroup", "distancegroupsk"),
+}
 
+SCOPES = ["raw", "stage", "dimension", "fact", "olap"]
+
+
+# --------------------------------------------------------------------------- báo cáo
 class Reporter:
     def __init__(self, suite: str, scope: str, include_large_scans: bool):
         self.suite = suite
@@ -86,32 +133,23 @@ class Reporter:
         self.started = datetime.now(timezone.utc)
         self.run_id = self.started.strftime("%Y%m%dT%H%M%SZ")
         self.tests: list[dict[str, Any]] = []
-        self.connection = None
 
     def add(self, test_id: str, name: str, layer: str, status: str, expected: str,
             actual: Any = None, note: str = "", duration_ms: int | None = None) -> None:
-        self.tests.append({
-            "test_id": test_id,
-            "name": name,
-            "layer": layer,
-            "status": status,
-            "expected": expected,
-            "actual": actual,
-            "note": note,
-            "duration_ms": duration_ms,
-        })
+        assert status in STATUSES, status
+        self.tests.append({"test_id": test_id, "name": name, "layer": layer, "status": status,
+                           "expected": expected, "actual": actual, "note": note, "duration_ms": duration_ms})
 
     def counts(self) -> dict[str, int]:
-        keys = ["PASS", "FAIL", "BLOCKED", "NOT RUN", "NOT APPLICABLE"]
-        return {key: sum(1 for t in self.tests if t["status"] == key) for key in keys}
+        return {key: sum(1 for t in self.tests if t["status"] == key) for key in STATUSES}
 
     def overall(self) -> str:
-        counts = self.counts()
-        if counts["FAIL"]:
+        c = self.counts()
+        if c["FAIL"]:
             return "FAIL"
-        if counts["BLOCKED"]:
+        if c["BLOCKED"]:
             return "BLOCKED"
-        if counts["NOT RUN"]:
+        if c["NOT RUN"]:
             return "PARTIAL"
         return "PASS"
 
@@ -121,764 +159,530 @@ class Reporter:
         md_path = RESULTS / f"run_{self.run_id}.md"
         finished = datetime.now(timezone.utc)
         payload = {
-            "run_id": self.run_id,
-            "started_at_utc": self.started.isoformat(),
-            "finished_at_utc": finished.isoformat(),
-            "suite": self.suite,
-            "scope": self.scope,
-            "read_only": True,
-            "large_table_scans_enabled": self.include_large_scans,
-            "overall_status": self.overall(),
-            "counts": self.counts(),
-            "tests": self.tests,
+            "run_id": self.run_id, "started_at_utc": self.started.isoformat(),
+            "finished_at_utc": finished.isoformat(), "engine": "duckdb", "suite": self.suite,
+            "scope": self.scope, "read_only": True, "large_table_scans_enabled": self.include_large_scans,
+            "overall_status": self.overall(), "counts": self.counts(), "tests": self.tests,
         }
-        json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
+        c = self.counts()
         lines = [
-            f"# ETL test run {self.run_id}", "",
-            f"- Suite: `{self.suite}`", f"- Scope: `{self.scope}`",
-            f"- Overall: **{self.overall()}**", "- Database mode: **read-only**",
-            f"- Full Stage scans: **{'enabled' if self.include_large_scans else 'disabled'}**", "",
-            "## Summary", "",
-            "| PASS | FAIL | BLOCKED | NOT RUN | NOT APPLICABLE |",
-            "|---:|---:|---:|---:|---:|",
-            "| " + " | ".join(str(self.counts()[s]) for s in ["PASS", "FAIL", "BLOCKED", "NOT RUN", "NOT APPLICABLE"]) + " |", "",
-            "## Results", "",
-            "| Test ID | Layer | Status | Test | Expected | Actual / note |",
-            "|---|---|---|---|---|---|",
+            f"# Lượt kiểm thử QA {self.run_id}", "",
+            f"- Suite: `{self.suite}`", f"- Phạm vi: `{self.scope}`", "- Engine: DuckDB (read_only)",
+            f"- Kết quả chung: **{self.overall()}**",
+            f"- Quét toàn bảng lớn: **{'bật' if self.include_large_scans else 'tắt'}**", "",
+            "## Tổng hợp", "",
+            "| " + " | ".join(STATUSES) + " |", "|" + "---:|" * len(STATUSES),
+            "| " + " | ".join(str(c[s]) for s in STATUSES) + " |", "",
+            "## Kết quả", "",
+            "| Mã | Tầng | Trạng thái | Kiểm tra | Kỳ vọng | Thực tế / ghi chú | ms |",
+            "|---|---|---|---|---|---|---:|",
         ]
-        for test in self.tests:
-            actual = test["actual"]
-            note = test["note"]
-            detail = " ".join(str(x) for x in [actual, note] if x not in (None, ""))
+        for t in self.tests:
+            detail = " ".join(str(x) for x in [t["actual"], t["note"]] if x not in (None, ""))
             detail = detail.replace("|", "\\|").replace("\n", " ")
-            expected = str(test["expected"]).replace("|", "\\|").replace("\n", " ")
-            lines.append(f"| {test['test_id']} | {test['layer']} | **{test['status']}** | {test['name']} | {expected} | {detail} |")
-        lines += ["", f"Generated at {finished.isoformat()} (UTC). No ETL, DDL, or DML was executed.", ""]
+            expected = str(t["expected"]).replace("|", "\\|").replace("\n", " ")
+            ms = "" if t["duration_ms"] is None else str(t["duration_ms"])
+            lines.append(f"| {t['test_id']} | {t['layer']} | **{t['status']}** | {t['name']} | {expected} | {detail} | {ms} |")
+        lines += ["", f"Tạo lúc {finished.isoformat()} (UTC). Không chạy ETL, DDL hay DML.", ""]
         md_path.write_text("\n".join(lines), encoding="utf-8")
         return json_path, md_path
 
 
-def parse_env_file() -> dict[str, str]:
-    """Read local Compose settings for connection only; never include values in reports."""
-    env_path = ROOT / ".env"
-    values: dict[str, str] = {}
-    if not env_path.exists():
-        return values
-    for raw in env_path.read_text(encoding="utf-8-sig").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        values[key.strip()] = value
-    return values
-
-
-def is_container() -> bool:
-    return Path("/.dockerenv").exists() or os.environ.get("USER_CODE_PATH") == "/home/src/mage"
-
-
-def run_static_preflight(r: Reporter) -> None:
-    missing = [name for name in REQUIRED_FILES if not (ROOT / name).is_file()]
-    r.add("PF-REPO-01", "Required repository assets", "Preflight",
-          "PASS" if not missing else "FAIL", "Stage/Dimension scripts and loader files exist",
-          actual="all present" if not missing else f"missing: {', '.join(missing)}")
-
-    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8").lower()
-    if "postgres:17" in compose and "sqlserver" not in compose and "mssql" not in compose:
-        r.add("PF-DIALECT-01", "Verify database engine", "Preflight", "PASS",
-              "Use repository's configured database", "PostgreSQL 17; no SQL Server service configured",
-              "The supplied task mentions SQL Server; this suite follows the repository configuration.")
-    else:
-        r.add("PF-DIALECT-01", "Verify database engine", "Preflight", "FAIL",
-              "Use repository's configured database", "Database engine could not be confirmed from Compose")
-
-    env_values = parse_env_file()
-    configured = {**env_values, **{key: val for key, val in os.environ.items() if key in REQUIRED_ENV}}
-    missing_env = [key for key in REQUIRED_ENV if not configured.get(key)]
-    r.add("PF-ENV-01", "Required connection settings are present", "Preflight",
-          "PASS" if not missing_env else "BLOCKED", "Required variable names configured; values kept private",
-          actual="all required names present" if not missing_env else f"missing names: {', '.join(missing_env)}")
-
-    compose_cmd = shutil_which("docker")
-    if is_container():
-        r.add("PF-COMPOSE-01", "Docker Compose configuration parses", "Preflight", "NOT APPLICABLE",
-              "Host Compose config is validated when the runner is launched from the repository root",
-              note="Runner is inside a container and cannot invoke the host Docker Compose CLI.")
-    elif compose_cmd is None:
-        r.add("PF-COMPOSE-01", "Docker Compose configuration parses", "Preflight", "BLOCKED",
-              "Docker Compose CLI available and configuration valid", note="Docker CLI not found")
-    else:
-        try:
-            proc = subprocess.run([compose_cmd, "compose", "config", "--quiet"], cwd=ROOT,
-                                  capture_output=True, text=True, timeout=30)
-            r.add("PF-COMPOSE-01", "Docker Compose configuration parses", "Preflight",
-                  "PASS" if proc.returncode == 0 else "FAIL", "docker compose config --quiet succeeds",
-                  actual="configuration valid" if proc.returncode == 0 else "configuration invalid",
-                  note="" if proc.returncode == 0 else safe_text(proc.stderr, configured.get("POSTGRES_PASSWORD")))
-        except Exception as exc:
-            r.add("PF-COMPOSE-01", "Docker Compose configuration parses", "Preflight", "BLOCKED",
-                  "docker compose config --quiet succeeds", note=type(exc).__name__)
-
-    dim_ddl = (ROOT / "sql/warehouse/01_create_dimensions.sql").read_text(encoding="utf-8").upper()
-    dim_load = (ROOT / "sql/warehouse/02_load_dimensions.sql").read_text(encoding="utf-8").upper()
-    has_destructive_ddl = bool(re.search(r"\bDROP\s+TABLE\b", dim_ddl))
-    has_writes = bool(re.search(r"\b(INSERT|UPDATE|DELETE|TRUNCATE)\b", dim_load))
-    r.add("PF-SAFETY-01", "Write-impact scripts identified and excluded", "Preflight", "PASS",
-          "Runner does not invoke ETL or mutating scripts",
-          actual=f"create script contains DROP TABLE={has_destructive_ddl}; load script contains DML={has_writes}")
-
-
-def shutil_which(name: str) -> str | None:
-    # Local implementation to keep the runner in the standard library.
-    from shutil import which
-    return which(name)
-
-
-def safe_text(value: str | None, password: str | None) -> str:
-    text = (value or "").strip()
-    if password:
-        text = text.replace(password, "<redacted>")
-    return text[:500]
-
-
-class PsqlCursor:
-    """Small read-only adapter for hosts without psycopg2; each query is rolled back."""
-    description = True
-
-    def __init__(self, connection: "PsqlConnection"):
-        self.connection = connection
-        self.rows: list[tuple[Any, ...]] = []
-
-    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
-        if params:
-            values = iter(params)
-
-            def literal(value: Any) -> str:
-                if value is None:
-                    return "NULL"
-                if isinstance(value, bool):
-                    return "TRUE" if value else "FALSE"
-                if isinstance(value, (int, float)):
-                    return str(value)
-                return "'" + str(value).replace("'", "''") + "'"
-
-            sql, count = re.subn(r"%s", lambda _m: literal(next(values)), sql)
-            if count != len(params):
-                raise ValueError("SQL parameter count mismatch")
-        guarded_sql = f"BEGIN READ ONLY; {sql.rstrip().rstrip(';')}; ROLLBACK;"
-        proc = subprocess.run(
-            [self.connection.docker, "compose", "exec", "-T", "postgres", "psql",
-             "-X", "-q", "-A", "-t", "-F", "|", "-v", "ON_ERROR_STOP=1",
-             "-U", self.connection.user, "-d", self.connection.database, "-c", guarded_sql],
-            cwd=ROOT, capture_output=True, text=True, timeout=1800,
-        )
-        if proc.returncode != 0:
-            raise RuntimeError(safe_text(proc.stderr, self.connection.password) or "psql query failed")
-        self.rows = []
-        for line in proc.stdout.splitlines():
-            if not line:
-                continue
-            cells = line.split("|")
-            self.rows.append(tuple(self.connection.parse_cell(cell) for cell in cells))
-
-    def fetchall(self) -> list[tuple[Any, ...]]:
-        return self.rows
-
-    def __enter__(self) -> "PsqlCursor":
-        return self
-
-    def __exit__(self, *_args: Any) -> None:
-        return None
-
-
-class PsqlConnection:
-    def __init__(self, user: str, database: str, password: str | None):
-        self.docker = shutil_which("docker")
-        if not self.docker:
-            raise RuntimeError("Docker CLI not found")
-        self.user = user
-        self.database = database
-        self.password = password
-
-    @staticmethod
-    def parse_cell(value: str) -> Any:
-        if value == "t":
-            return True
-        if value == "f":
-            return False
-        if value == "":
-            return None
-        if re.fullmatch(r"-?\d+", value):
-            return int(value)
-        if re.fullmatch(r"-?(?:\d+\.\d*|\d*\.\d+)", value):
-            return float(value)
-        return value
-
-    def cursor(self) -> PsqlCursor:
-        return PsqlCursor(self)
-
-    def set_session(self, readonly: bool = True, autocommit: bool = False) -> None:
-        if not readonly or autocommit:
-            raise ValueError("The QA runner only permits read-only transactions")
-
-    def rollback(self) -> None:
-        return None
-
-    def close(self) -> None:
-        return None
-
-
-def get_running_compose_services(r: Reporter, password: str | None) -> set[str] | None:
-    docker = shutil_which("docker")
-    if docker is None:
-        r.add("PF-STACK-01", "Required Compose services are running", "Preflight", "BLOCKED",
-              "Postgres service running for database checks", note="Docker CLI not found")
-        r.add("PF-MAGE-01", "Mage service is running for ETL execution", "Preflight", "BLOCKED",
-              "Mage available if an operational loader test is authorized", note="Docker CLI not found")
-        return None
+def timed(r: Reporter, test_id: str, name: str, layer: str, expected: str,
+          fn: Callable[[], tuple[str, Any] | tuple[str, Any, str]]) -> str:
+    """Chạy một kiểm tra; fn trả (status, actual[, note]). Lỗi truy vấn được ghi FAIL."""
+    started = time.monotonic()
     try:
-        proc = subprocess.run([docker, "compose", "ps", "--status", "running", "--services"],
-                              cwd=ROOT, capture_output=True, text=True, timeout=30)
-    except Exception as exc:
-        r.add("PF-STACK-01", "Required Compose services are running", "Preflight", "BLOCKED",
-              "Postgres service running for database checks", note=type(exc).__name__)
-        r.add("PF-MAGE-01", "Mage service is running for ETL execution", "Preflight", "BLOCKED",
-              "Mage available if an operational loader test is authorized", note=type(exc).__name__)
-        return None
-    if proc.returncode != 0:
-        r.add("PF-STACK-01", "Required Compose services are running", "Preflight", "BLOCKED",
-              "Postgres service running for database checks",
-              note=safe_text(proc.stderr, password) or "Docker engine unavailable")
-        r.add("PF-MAGE-01", "Mage service is running for ETL execution", "Preflight", "BLOCKED",
-              "Mage available if an operational loader test is authorized", note="Docker engine unavailable")
-        return None
-    services = set(line.strip() for line in proc.stdout.splitlines() if line.strip())
-    if "postgres" not in services:
-        r.add("PF-STACK-01", "Required Compose services are running", "Preflight", "BLOCKED",
-              "Postgres service running for database checks",
-              actual=f"running services: {', '.join(sorted(services)) or 'none'}")
-    else:
-        r.add("PF-STACK-01", "Required Compose services are running", "Preflight", "PASS",
-              "Postgres service running", actual=f"running services: {', '.join(sorted(services))}")
-    if "mage" in services:
-        r.add("PF-MAGE-01", "Mage service is running for ETL execution", "Preflight", "PASS",
-              "Mage available if an operational loader test is authorized", actual="mage service running")
-    else:
-        r.add("PF-MAGE-01", "Mage service is running for ETL execution", "Preflight", "BLOCKED",
-              "Mage available if an operational loader test is authorized",
-              actual=f"running services: {', '.join(sorted(services)) or 'none'}",
-              note="The Stage loader was not executed.")
-    return services
+        result = fn()
+        status, actual = result[0], result[1]
+        note = result[2] if len(result) > 2 else ""
+    except Exception as exc:  # lỗi truy vấn là lỗi kiểm thử, không làm dừng runner
+        status, actual, note = "FAIL", None, f"{type(exc).__name__}: {str(exc)[:300]}"
+    r.add(test_id, name, layer, status, expected, actual, note, int((time.monotonic() - started) * 1000))
+    return status
 
 
-def open_readonly_connection(r: Reporter) -> Any:
-    values = parse_env_file()
-    values.update({key: val for key, val in os.environ.items() if key in REQUIRED_ENV})
-    missing = [key for key in REQUIRED_ENV if not values.get(key)]
-    if missing:
-        r.add("PF-DB-CONNECT", "Connect to PostgreSQL", "Preflight", "BLOCKED",
-              "Connection succeeds using configured settings", note=f"missing names: {', '.join(missing)}")
-        return None
-    if not is_container():
-        # Host-side execution uses psql already installed in the running Postgres
-        # container. This avoids adding Python packages to the workstation.
-        try:
-            conn = PsqlConnection(values["POSTGRES_USER"], values["POSTGRES_DB"], values.get("POSTGRES_PASSWORD"))
-            conn.set_session(readonly=True, autocommit=False)
-            with conn.cursor() as cur:
-                cur.execute("SELECT current_database(), current_user, current_setting('transaction_read_only')")
-                db_name, user_name, read_only = cur.fetchall()[0]
-            r.add("PF-DB-DRIVER", "PostgreSQL query client is available", "Preflight", "PASS",
-                  "psql available through the running Postgres service", actual="container psql")
-            r.add("PF-DB-CONNECT", "Connect to PostgreSQL", "Preflight", "PASS",
-                  "Connection succeeds using configured settings", actual=f"database={db_name}; user={user_name}")
-            r.add("PF-DB-READONLY", "Read-only transaction enforced", "Preflight",
-                  "PASS" if read_only == "on" else "FAIL", "transaction_read_only=on", actual=read_only)
-            return conn
-        except Exception as exc:
-            r.add("PF-DB-CONNECT", "Connect to PostgreSQL", "Preflight", "BLOCKED",
-                  "Connection succeeds using configured settings", note=safe_text(str(exc), values.get("POSTGRES_PASSWORD")) or type(exc).__name__)
-            r.add("PF-DB-READONLY", "Read-only transaction enforced", "Preflight", "BLOCKED",
-                  "transaction_read_only=on", note="No connection")
-            return None
-    try:
-        import psycopg2  # supplied by the existing Mage Docker image
-    except Exception:
-        r.add("PF-DB-DRIVER", "PostgreSQL driver is available", "Preflight", "BLOCKED",
-              "psycopg2 available in the Mage runtime", note="Mage image is expected to install psycopg2-binary")
-        return None
-    host = values["POSTGRES_HOST"]
-    if not is_container() and host in {"postgres", "nyc-postgres"}:
-        host = "127.0.0.1"
-    try:
-        conn = psycopg2.connect(
-            host=host,
-            port=int(values["POSTGRES_PORT"]),
-            dbname=values["POSTGRES_DB"],
-            user=values["POSTGRES_USER"],
-            password=values["POSTGRES_PASSWORD"],
-            connect_timeout=5,
-            application_name="nyc_taxi_readonly_qa",
-        )
-        conn.set_session(readonly=True, autocommit=False)
-        r.connection = conn
-        with conn.cursor() as cur:
-            cur.execute("SELECT current_database(), current_user, current_setting('transaction_read_only')")
-            db_name, user_name, read_only = cur.fetchone()
-        if is_container():
-            r.add("PF-STACK-01", "Required Compose services are running", "Preflight", "PASS",
-                  "Postgres reachable from test runtime", actual="database service connection succeeded")
-            mage_runtime = os.environ.get("USER_CODE_PATH") == "/home/src/mage"
-            r.add("PF-MAGE-01", "Mage service is running for ETL execution", "Preflight",
-                  "PASS" if mage_runtime else "BLOCKED", "Runner executing in Mage runtime",
-                  actual="Mage runtime" if mage_runtime else "container is not identified as Mage")
-        r.add("PF-DB-CONNECT", "Connect to PostgreSQL", "Preflight", "PASS",
-              "Connection succeeds using configured settings", actual=f"database={db_name}; user={user_name}")
-        r.add("PF-DB-READONLY", "Read-only transaction enforced", "Preflight",
-              "PASS" if read_only == "on" else "FAIL", "transaction_read_only=on", actual=read_only)
-        return conn
-    except Exception as exc:
-        password = values.get("POSTGRES_PASSWORD")
-        r.add("PF-DB-CONNECT", "Connect to PostgreSQL", "Preflight", "BLOCKED",
-              "Connection succeeds using configured settings", note=safe_text(str(exc), password) or type(exc).__name__)
-        r.add("PF-DB-READONLY", "Read-only transaction enforced", "Preflight", "BLOCKED",
-              "transaction_read_only=on", note="No connection")
-        return None
+# --------------------------------------------------------------------------- tiện ích DB
+def db_path() -> Path:
+    return Path(os.environ.get("DUCKDB_PATH") or DEFAULT_DB)
 
 
-def query(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
-    with conn.cursor() as cur:
-        cur.execute(sql, params)
-        return cur.fetchall() if cur.description else []
+def q(conn: Any, sql: str, params: list[Any] | None = None) -> list[tuple[Any, ...]]:
+    return conn.execute(sql, params or []).fetchall()
+
+
+def q1(conn: Any, sql: str, params: list[Any] | None = None) -> Any:
+    return q(conn, sql, params)[0][0]
 
 
 def relation_exists(conn: Any, relation: str) -> bool:
-    return bool(query(conn, "SELECT to_regclass(%s) IS NOT NULL", (relation,))[0][0])
+    schema, name = relation.split(".")
+    return bool(q1(conn, """
+        select count(*) from information_schema.tables where table_schema = ? and table_name = ?
+    """, [schema, name]))
 
 
-def relation_estimate(conn: Any, schema: str, table: str) -> int | None:
-    row = query(conn, """
-        SELECT GREATEST(c.reltuples, 0)::bigint
-        FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-        WHERE n.nspname=%s AND c.relname=%s
-    """, (schema, table))
-    return int(row[0][0]) if row else None
+def columns(conn: Any, relation: str) -> dict[str, tuple[str, str]]:
+    schema, name = relation.split(".")
+    rows = q(conn, """
+        select column_name, data_type, is_nullable from information_schema.columns
+        where table_schema = ? and table_name = ?
+    """, [schema, name])
+    return {c: (t, n) for c, t, n in rows}
 
 
-def add_blocked_smoke(r: Reporter, scope: str, reason: str) -> None:
-    if scope in ("all", "stage"):
-        for test_id, name in [
-            ("STG-SM-01", "Trip Stage table exists and is readable"),
-            ("STG-SM-02", "Zone Lookup Stage table exists and is readable"),
-            ("STG-SM-03", "ETL control table exists and is readable"),
-            ("STG-SM-04", "Source inputs and loader files are available"),
-            ("STG-ETL-01", "Stage ETL execution in an isolated target"),
-        ]:
-            r.add(test_id, name, "Stage Smoke", "BLOCKED", "Read-only database check", note=reason)
-    if scope in ("all", "dimension"):
-        for d in DIMENSIONS:
-            r.add(f"DIM-SM-{d['name']}", f"{d['name']} exists, is readable, and has Unknown member",
-                  "Dimension Smoke", "BLOCKED", "Read-only database check", note=reason)
+# --------------------------------------------------------------------------- preflight
+def run_static_preflight(r: Reporter) -> None:
+    missing = [name for name in REQUIRED_FILES if not (ROOT / name).is_file()]
+    r.add("PF-REPO-01", "File cần thiết của repo", "Preflight", "PASS" if not missing else "FAIL",
+          "DDL, pipeline Mage, project dbt và Zone CSV có trong repo",
+          actual="đủ" if not missing else f"thiếu: {', '.join(missing)}")
+
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8").lower()
+    has_postgres = "image: postgres" in compose or "\n  postgres:" in compose
+    has_duckdb = "duckdb_path" in compose
+    r.add("PF-ENGINE-01", "Engine kho dữ liệu là DuckDB", "Preflight",
+          "PASS" if has_duckdb and not has_postgres else "FAIL",
+          "docker-compose.yml cấu hình DUCKDB_PATH và không còn service PostgreSQL",
+          actual=f"duckdb_path={has_duckdb}; postgres_service={has_postgres}")
+
+    docker = which("docker")
+    if Path("/.dockerenv").exists():
+        r.add("PF-COMPOSE-01", "docker compose config hợp lệ", "Preflight", "NOT APPLICABLE",
+              "Kiểm tra khi chạy runner trên máy host", note="Runner đang chạy trong container.")
+    elif docker is None:
+        r.add("PF-COMPOSE-01", "docker compose config hợp lệ", "Preflight", "BLOCKED",
+              "Docker CLI có sẵn", note="Không tìm thấy Docker CLI")
+    else:
+        proc = subprocess.run([docker, "compose", "config", "--quiet"], cwd=ROOT,
+                              capture_output=True, text=True, timeout=60)
+        r.add("PF-COMPOSE-01", "docker compose config hợp lệ", "Preflight",
+              "PASS" if proc.returncode == 0 else "FAIL", "docker compose config --quiet thành công",
+              actual="hợp lệ" if proc.returncode == 0 else proc.stderr.strip()[:300])
 
 
-def smoke_stage(r: Reporter, conn: Any) -> bool:
-    relation_specs = [
-        ("STG-SM-01", "Trip Stage table exists and is readable", "stage.stg_yellow_taxi_trips", "stage", "stg_yellow_taxi_trips"),
-        ("STG-SM-02", "Zone Lookup Stage table exists and is readable", "stage.stg_taxi_zone_lookup", "stage", "stg_taxi_zone_lookup"),
-        ("STG-SM-03", "ETL control table exists and is readable", "control.etl_control", "control", "etl_control"),
-    ]
-    ok_all = True
-    for test_id, name, rel, schema, table in relation_specs:
-        started = time.monotonic()
-        try:
-            exists = relation_exists(conn, rel)
-            if not exists:
-                r.add(test_id, name, "Stage Smoke", "FAIL", f"{rel} exists and can be queried", actual="relation missing")
-                ok_all = False
-                continue
-            row = query(conn, f"SELECT 1 FROM {rel} LIMIT 1")
-            metric = (f"estimated_rows={relation_estimate(conn, schema, table)}" if table == "stg_yellow_taxi_trips"
-                      else f"exact_rows={query(conn, f'SELECT count(*) FROM {rel}')[0][0]}")
-            r.add(test_id, name, "Stage Smoke", "PASS", f"{rel} exists and can be queried",
-                  actual=f"readable; {metric}; has_row={bool(row)}",
-                  note="Trip row count is a planner estimate; other counts are exact.",
-                  duration_ms=int((time.monotonic()-started)*1000))
-        except Exception as exc:
-            r.add(test_id, name, "Stage Smoke", "FAIL", f"{rel} can be queried", note=type(exc).__name__)
-            ok_all = False
-    csv_ok = (ROOT / "data/reference/taxi_zone_lookup.csv").is_file()
-    parquet_files = list((ROOT / "data/raw").glob("*.parquet")) if (ROOT / "data/raw").exists() else []
-    loader_ok = (ROOT / "mage/data_exporters/load_trips_to_raw.py").is_file()
-    r.add("STG-SM-04", "Source inputs and loader files are available", "Stage Smoke",
-          "PASS" if csv_ok and loader_ok else "FAIL",
-          "Zone CSV and Mage loader present; no source download performed",
-          actual=f"zone_csv={csv_ok}; parquet_files_present={len(parquet_files)}; trip_loader={loader_ok}",
-          note="Missing Parquet files are normally downloaded by the loader; this smoke test does not download or load them.")
-    r.add("STG-ETL-01", "Stage ETL execution in an isolated target", "Stage Smoke", "BLOCKED",
-          "Execute the loader only against a disposable database",
-          note="The loader performs DELETE/COPY writes. No isolated test database is configured, and the Mage service is not running.")
-    return ok_all and csv_ok and loader_ok
+def open_readonly_connection(r: Reporter) -> Any:
+    try:
+        import duckdb
+    except ImportError:
+        r.add("PF-DB-DRIVER", "Thư viện duckdb", "Preflight", "BLOCKED", "duckdb 1.5.x import được",
+              note="Không có duckdb; chạy runner trong container Mage (.\\tasks.ps1 qa).")
+        return None
+    version_ok = duckdb.__version__.startswith("1.5.")
+    r.add("PF-DB-DRIVER", "Thư viện duckdb", "Preflight", "PASS" if version_ok else "FAIL",
+          "duckdb 1.5.x (cùng phiên bản với Mage và dbt)", actual=duckdb.__version__)
+
+    path = db_path()
+    if not path.is_file():
+        r.add("PF-DB-CONNECT", "Mở file DuckDB", "Preflight", "BLOCKED", "File database tồn tại",
+              actual=str(path), note="Chưa chạy ingestion?")
+        return None
+    try:
+        conn = duckdb.connect(str(path), read_only=True)
+        conn.execute("set enable_progress_bar = false")
+    except Exception as exc:
+        r.add("PF-DB-CONNECT", "Mở file DuckDB", "Preflight", "BLOCKED", "Mở được ở chế độ read_only",
+              actual=str(path), note=f"{type(exc).__name__}: {str(exc)[:300]} (pipeline Mage/dbt đang ghi?)")
+        return None
+    size_gb = path.stat().st_size / 1024 ** 3
+    r.add("PF-DB-CONNECT", "Mở file DuckDB", "Preflight", "PASS", "Mở được ở chế độ read_only",
+          actual=f"{path.name}; {size_gb:.2f} GB")
+
+    # Chứng minh không ghi được: lệnh tạo bảng phải bị từ chối.
+    try:
+        conn.execute("create table main.__qa_write_probe (x integer)")
+        r.add("PF-DB-READONLY", "Kết nối chỉ đọc", "Preflight", "FAIL", "Lệnh ghi bị từ chối",
+              actual="lệnh ghi được chấp nhận")
+    except Exception as exc:
+        r.add("PF-DB-READONLY", "Kết nối chỉ đọc", "Preflight", "PASS", "Lệnh ghi bị từ chối",
+              actual=type(exc).__name__)
+    return conn
 
 
-def smoke_dimensions(r: Reporter, conn: Any) -> dict[str, bool]:
-    results: dict[str, bool] = {}
-    for d in DIMENSIONS:
-        test_id = f"DIM-SM-{d['name']}"
-        try:
-            exists = relation_exists(conn, d["table"])
-            if not exists:
-                r.add(test_id, f"{d['name']} exists, is readable, and has Unknown member", "Dimension Smoke",
-                      "FAIL", "Dimension relation exists", actual="relation missing")
-                results[d["name"]] = False
-                continue
-            cols = query(conn, """
-                SELECT column_name FROM information_schema.columns
-                WHERE table_schema='dds' AND table_name=%s
-            """, (d["db_name"],))
-            actual_cols = {row[0] for row in cols}
-            missing_cols = [col for col in d["cols"] if col not in actual_cols]
-            row = query(conn, f"SELECT 1 FROM {d['table']} LIMIT 1")
-            unknown = query(conn, f"SELECT 1 FROM {d['table']} WHERE {d['sk']}=-1 LIMIT 1")
-            good = not missing_cols and bool(row) and bool(unknown)
-            note = f"missing_columns={missing_cols}" if missing_cols else ""
-            r.add(test_id, f"{d['name']} exists, is readable, and has Unknown member", "Dimension Smoke",
-                  "PASS" if good else "FAIL", "Required columns readable and one SK=-1 member exists",
-                  actual=f"readable={bool(row)}; unknown_member={bool(unknown)}", note=note)
-            results[d["name"]] = good
-        except Exception as exc:
-            r.add(test_id, f"{d['name']} exists, is readable, and has Unknown member", "Dimension Smoke",
-                  "FAIL", "Read-only query succeeds", note=type(exc).__name__)
-            results[d["name"]] = False
-    return results
-
-
-def run_smoke(r: Reporter, conn: Any, scope: str) -> tuple[bool, dict[str, bool]]:
-    if conn is None:
-        add_blocked_smoke(r, scope, "Preflight did not establish a safe database connection.")
-        return False, {}
-    stage_ok = True
-    dimensions_ok: dict[str, bool] = {}
-    if scope in ("all", "stage"):
-        stage_ok = smoke_stage(r, conn)
-    if scope in ("all", "dimension"):
-        dimensions_ok = smoke_dimensions(r, conn)
-    return stage_ok, dimensions_ok
-
-
-def blocked_deep(r: Reporter, scope: str, reason: str) -> None:
-    if scope in ("all", "stage"):
-        for test_id, name in [
-            ("STG-SCH-01", "Stage schema contract"),
-            ("STG-CMP-01", "Required audit fields are non-null by schema"),
-            ("STG-REC-01", "Successful ETL control rows reconcile"),
-            ("STG-VAL-01", "Stage quality profile metrics"),
-            ("STG-DUP-01", "Source row numbers are unique per file"),
-            ("STG-REC-02", "Stage row counts reconcile to latest successful loads"),
-        ]:
-            r.add(test_id, name, "Stage Deep", "BLOCKED", "Read-only SQL assertion", note=reason)
-    if scope in ("all", "dimension"):
-        for d in DIMENSIONS:
-            r.add(f"DIM-SCH-{d['name']}", f"{d['name']} schema, SK, natural key, Unknown, and uniqueness",
-                  "Dimension Deep", "BLOCKED", "Read-only SQL assertions", note=reason)
-        for test_id, name in [
-            ("DIM-MAP-01", "Stage natural keys map to their Dimensions"),
-            ("DIM-MAP-02", "Vendor/payment/rate-code normalization matches code"),
-            ("DIM-IDEMP-01", "Dimension ETL idempotency in isolated test database"),
-            ("NEG-FIXTURE-01", "Negative fixtures are detected by assertions"),
-        ]:
-            status = "BLOCKED" if test_id != "DIM-IDEMP-01" else "BLOCKED"
-            r.add(test_id, name, "Dimension Deep", status, "Safe, isolated test database required", note=reason)
-    r.add("FACT-INT-01", "Fact integration checks", "Integration", "BLOCKED",
-          "Fact implementation exists before integration tests", note="Fact table/ETL is absent from the tracked repository.")
-
-
-def deep_stage(r: Reporter, conn: Any, include_large_scans: bool) -> None:
-    expected = {
-        "stg_yellow_taxi_trips": {
-            "vendor_id": "integer", "tpep_pickup_datetime": "timestamp without time zone",
-            "tpep_dropoff_datetime": "timestamp without time zone", "passenger_count": "bigint",
-            "trip_distance": "double precision", "ratecode_id": "bigint", "store_and_fwd_flag": "character varying",
-            "pu_location_id": "integer", "do_location_id": "integer", "payment_type": "bigint",
-            "fare_amount": "double precision", "extra": "double precision", "mta_tax": "double precision",
-            "tip_amount": "double precision", "tolls_amount": "double precision", "improvement_surcharge": "double precision",
-            "total_amount": "double precision", "congestion_surcharge": "double precision", "airport_fee": "double precision",
-            "cbd_congestion_fee": "double precision", "source_file_name": "character varying",
-            "source_row_number": "bigint", "batch_id": "bigint", "load_datetime": "timestamp without time zone",
-        },
-        "stg_taxi_zone_lookup": {
-            "location_id": "integer", "borough": "character varying", "zone": "character varying",
-            "service_zone": "character varying", "source_file_name": "character varying", "batch_id": "bigint",
-            "load_datetime": "timestamp without time zone",
-        },
-    }
-    schema_pass = True
-    for index, (table, expected_cols) in enumerate(expected.items(), start=1):
-        rows = query(conn, """
-            SELECT column_name, data_type FROM information_schema.columns
-            WHERE table_schema='stage' AND table_name=%s
-        """, (table,))
-        actual = {row[0]: row[1] for row in rows}
-        missing = sorted(set(expected_cols) - set(actual))
-        extra = sorted(set(actual) - set(expected_cols))
-        mismatched = sorted(k for k in set(expected_cols) & set(actual) if expected_cols[k] != actual[k])
-        good = not missing and not extra and not mismatched
-        schema_pass &= good
-        r.add(f"STG-SCH-{index:02d}", f"Schema contract for stage.{table}", "Stage Deep",
-              "PASS" if good else "FAIL", "Expected columns and PostgreSQL types match DDL",
-              actual=f"columns={len(actual)}; missing={missing}; extra={extra}; type_mismatch={mismatched}")
-    required = query(conn, """
-        SELECT table_name, column_name, is_nullable
-        FROM information_schema.columns
-        WHERE table_schema='stage' AND
-              ((table_name='stg_yellow_taxi_trips' AND column_name IN ('source_file_name','load_datetime')) OR
-               (table_name='stg_taxi_zone_lookup' AND column_name IN ('source_file_name','load_datetime')))
-    """)
-    bad_nullable = [f"{table}.{col}" for table, col, nullable in required if nullable != "NO"]
-    r.add("STG-CMP-01", "Required audit fields are non-null by schema", "Stage Deep",
-          "PASS" if not bad_nullable and len(required) == 4 else "FAIL",
-          "source_file_name and load_datetime are NOT NULL on both Stage tables",
-          actual=f"checked={len(required)}; nullable_required={bad_nullable}")
-
-    rec = query(conn, """
-        SELECT count(*) FILTER (WHERE status='SUCCESS' AND rows_read IS DISTINCT FROM rows_loaded),
-               count(*) FILTER (WHERE status='SUCCESS' AND COALESCE(rows_rejected,0)<>0),
-               count(*) FILTER (WHERE status='SUCCESS'), count(*)
-        FROM control.etl_control
-    """)[0]
-    bad_counts, bad_rejects, success_count, all_count = map(int, rec)
-    rec_status = "NOT APPLICABLE" if success_count == 0 else ("PASS" if bad_counts == 0 and bad_rejects == 0 else "FAIL")
-    r.add("STG-REC-01", "Successful ETL control rows reconcile", "Stage Deep", rec_status,
-          "Successful batches have rows_read=rows_loaded and rows_rejected=0",
-          actual=f"successful={success_count}; all_control_rows={all_count}; bad_count_rows={bad_counts}; bad_reject_rows={bad_rejects}")
-
-    if not include_large_scans:
-        for test_id, name in [
-            ("STG-VAL-01", "Stage quality profile metrics"),
-            ("STG-DUP-01", "Source row numbers are unique per file"),
-            ("STG-REC-02", "Stage row counts reconcile to latest successful loads"),
-        ]:
-            r.add(test_id, name, "Stage Deep", "NOT RUN", "Full Stage scan; run with --include-large-scans",
-                  note="Omitted by default to avoid an unplanned full scan of the large trip table.")
-        return
-
-    started = time.monotonic()
-    metrics = query(conn, """
-        SELECT count(*) AS row_count,
-               count(*) FILTER (WHERE tpep_pickup_datetime IS NULL) AS pickup_null,
-               count(*) FILTER (WHERE tpep_dropoff_datetime IS NULL) AS dropoff_null,
-               count(*) FILTER (WHERE tpep_dropoff_datetime < tpep_pickup_datetime) AS dropoff_before_pickup,
-               count(*) FILTER (WHERE trip_distance<=0) AS nonpositive_distance,
-               count(*) FILTER (WHERE fare_amount<0) AS negative_fare,
-               count(*) FILTER (WHERE total_amount<0) AS negative_total
-        FROM stage.stg_yellow_taxi_trips
-    """)[0]
-    metric_dict = dict(zip(["rows", "pickup_null", "dropoff_null", "dropoff_before_pickup", "nonpositive_distance", "negative_fare", "negative_total"], map(int, metrics)))
-    r.add("STG-VAL-01", "Stage quality profile metrics", "Stage Deep", "NOT APPLICABLE",
-          "Metrics recorded; no zero-tolerance business threshold is defined in repository",
-          actual=metric_dict, note="Raw Stage preserves source anomalies; counts do not alone indicate failure.",
-          duration_ms=int((time.monotonic()-started)*1000))
-
-    started = time.monotonic()
-    duplicates = int(query(conn, """
-        SELECT count(*) FROM (
-          SELECT source_file_name, source_row_number
-          FROM stage.stg_yellow_taxi_trips
-          GROUP BY source_file_name, source_row_number
-          HAVING count(*)>1
-        ) d
-    """)[0][0])
-    r.add("STG-DUP-01", "Source row numbers are unique per file", "Stage Deep",
-          "PASS" if duplicates == 0 else "FAIL", "No duplicate (source_file_name, source_row_number)",
-          actual=f"duplicate_keys={duplicates}", duration_ms=int((time.monotonic()-started)*1000))
-
-    started = time.monotonic()
-    mismatches = query(conn, """
-        WITH latest AS (
-          SELECT DISTINCT ON (source_file_name) source_file_name, rows_loaded
-          FROM control.etl_control WHERE status='SUCCESS'
-          ORDER BY source_file_name, control_id DESC
-        ), observed AS (
-          SELECT source_file_name, count(*) AS actual_rows
-          FROM stage.stg_yellow_taxi_trips GROUP BY source_file_name
-        )
-        SELECT count(*) FROM latest l FULL JOIN observed o USING(source_file_name)
-        WHERE l.rows_loaded IS DISTINCT FROM o.actual_rows
-    """)[0][0]
-    mismatch_count = int(mismatches)
-    r.add("STG-REC-02", "Stage row counts reconcile to latest successful loads", "Stage Deep",
-          "NOT APPLICABLE" if mismatch_count == 0 and not query(conn, "SELECT 1 FROM control.etl_control WHERE status='SUCCESS' LIMIT 1") else ("PASS" if mismatch_count == 0 else "FAIL"),
-          "Each latest successful file log equals its Stage row count",
-          actual=f"mismatched_files={mismatch_count}", duration_ms=int((time.monotonic()-started)*1000))
-
-
-def deep_dimension(r: Reporter, conn: Any, smoke_results: dict[str, bool], include_large_scans: bool) -> None:
-    for d in DIMENSIONS:
-        if not smoke_results.get(d["name"], False):
-            r.add(f"DIM-SCH-{d['name']}", f"{d['name']} key, natural key, Unknown, and uniqueness",
-                  "Dimension Deep", "BLOCKED", "Dimension Smoke passes first", note="Dimension Smoke did not pass.")
+# --------------------------------------------------------------------------- smoke
+def run_smoke(r: Reporter, conn: Any, scopes: list[str]) -> dict[str, bool]:
+    """Trả về {tên tầng/bảng: smoke đạt} để gate các kiểm tra deep."""
+    ok: dict[str, bool] = {}
+    layer_of = {"raw": "raw", "stage": "stage", "fact": "fact", "olap": "olap", "snapshot": "dimension"}
+    for group, relations in RELATIONS.items():
+        if layer_of[group] not in scopes:
             continue
-        table = d["table"]
-        sk = d["sk"]
-        natural = d["natural"]
-        nat_expr = ", ".join(natural)
-        null_natural_clause = " OR ".join(f"{col} IS NULL" for col in natural)
-        counts = query(conn, f"""
-            SELECT count(*) FILTER (WHERE {sk} IS NULL),
-                   count(*)-count(DISTINCT {sk}),
-                   count(*) FILTER (WHERE {null_natural_clause}),
-                   count(*) FILTER (WHERE {sk}=-1)
-            FROM {table}
+        for rel in relations:
+            def check(rel: str = rel) -> tuple[str, Any]:
+                if not relation_exists(conn, rel):
+                    return "FAIL", "không tồn tại"
+                n = q1(conn, f"select count(*) from {rel}")
+                return ("PASS" if n > 0 else "FAIL"), f"rows={n:,}"
+            status = timed(r, f"SM-{rel}", f"{rel} tồn tại và có dữ liệu", f"Smoke {group}",
+                           "Đọc được, số dòng > 0", check)
+            ok[rel] = status == "PASS"
+    if "dimension" in scopes:
+        for d in DIMENSIONS:
+            def check_dim(d: dict[str, Any] = d) -> tuple[str, Any, str]:
+                if not relation_exists(conn, d["table"]):
+                    return "FAIL", "không tồn tại", ""
+                missing = [c for c in d["cols"] if c not in columns(conn, d["table"])]
+                unknown = q1(conn, f"select count(*) from {d['table']} where {d['sk']} = -1")
+                good = not missing and unknown == 1
+                return ("PASS" if good else "FAIL"), f"unknown_rows={unknown}", (f"thiếu cột {missing}" if missing else "")
+            status = timed(r, f"SM-{d['name']}", f"{d['name']} đủ cột và có đúng một dòng Unknown (-1)",
+                           "Smoke dimension", "Đủ cột; một dòng SK = -1", check_dim)
+            ok[d["name"]] = status == "PASS"
+    return ok
+
+
+# --------------------------------------------------------------------------- deep: raw
+def deep_raw(r: Reporter, conn: Any, large: bool) -> None:
+    layer = "Deep raw"
+    for i, (rel, contract) in enumerate(RAW_CONTRACT.items(), start=1):
+        def check(rel: str = rel, contract: dict[str, str] = contract) -> tuple[str, Any]:
+            actual = {c: t for c, (t, _n) in columns(conn, rel).items()}
+            missing = sorted(set(contract) - set(actual))
+            extra = sorted(set(actual) - set(contract))
+            mismatch = sorted(c for c in set(contract) & set(actual) if contract[c] != actual[c])
+            good = not (missing or extra or mismatch)
+            return ("PASS" if good else "FAIL"), f"cột={len(actual)}; thiếu={missing}; thừa={extra}; sai_kiểu={mismatch}"
+        timed(r, f"RAW-SCH-{i:02d}", f"Hợp đồng schema {rel}", layer, "Cột và kiểu khớp sql/ddl/02_create_raw.sql", check)
+
+    def not_null() -> tuple[str, Any]:
+        bad = [f"{rel}.{col}" for rel, col in RAW_NOT_NULL if columns(conn, rel).get(col, ("", "YES"))[1] != "NO"]
+        return ("PASS" if not bad else "FAIL"), f"cột cho phép NULL: {bad}"
+    timed(r, "RAW-CMP-01", "Cột kiểm toán NOT NULL theo schema", layer,
+          "source_file_name, load_datetime NOT NULL ở cả hai bảng raw", not_null)
+
+    def control() -> tuple[str, Any]:
+        bad_counts, bad_rejects, success, total = q(conn, """
+            select count(*) filter (where status = 'SUCCESS' and rows_read is distinct from rows_loaded),
+                   count(*) filter (where status = 'SUCCESS' and coalesce(rows_rejected, 0) <> 0),
+                   count(*) filter (where status = 'SUCCESS'), count(*)
+            from control.etl_control
         """)[0]
-        null_sk, duplicate_sk, null_natural, unknown_count = map(int, counts)
-        natural_duplicates = int(query(conn, f"""
-            SELECT count(*) FROM (
-                SELECT {nat_expr} FROM {table}
-                GROUP BY {nat_expr} HAVING count(*)>1
-            ) d
-        """)[0][0])
-        expected = d["expected_count"]
-        row_count = int(query(conn, f"SELECT count(*) FROM {table}")[0][0])
-        good = null_sk == 0 and duplicate_sk == 0 and null_natural == 0 and natural_duplicates == 0 and unknown_count == 1
-        r.add(f"DIM-SCH-{d['name']}", f"{d['name']} SK, natural key, Unknown, and uniqueness", "Dimension Deep",
-              "PASS" if good else "FAIL",
-              "SK/natural keys are non-null and unique; exactly one SK=-1 member exists",
-              actual=f"rows={row_count}; null_sk={null_sk}; duplicate_sk={duplicate_sk}; null_natural={null_natural}; duplicate_natural_groups={natural_duplicates}; unknown_rows={unknown_count}")
-        if expected is not None:
-            r.add(f"DIM-COUNT-{d['name']}", f"{d['name']} generated/static row count", "Dimension Deep",
-                  "PASS" if row_count == expected else "FAIL", f"Expected {expected} rows including Unknown member",
-                  actual=f"rows={row_count}")
+        if success == 0:
+            return "NOT APPLICABLE", "chưa có lượt nạp SUCCESS"
+        return ("PASS" if bad_counts == bad_rejects == 0 else "FAIL"), \
+            f"success={success}; tổng={total}; lệch_số_dòng={bad_counts}; có_reject={bad_rejects}"
+    timed(r, "RAW-REC-01", "Nhật ký nạp thành công tự khớp", layer,
+          "Lượt SUCCESS có rows_read = rows_loaded, rows_rejected = 0", control)
 
-    if not include_large_scans:
-        mapping_status = "BLOCKED" if not all(smoke_results.get(d["name"], False) for d in DIMENSIONS if d["source"]) else "NOT RUN"
-        mapping_note = ("Source-based Dimensions did not pass Smoke." if mapping_status == "BLOCKED"
-                        else "Omitted by default to avoid full scans.")
-        r.add("DIM-MAP-01", "Stage natural keys map to their Dimensions", "Dimension Deep", mapping_status,
-              "Large Stage scans require --include-large-scans", note=mapping_note)
-        r.add("DIM-MAP-02", "Vendor/payment/rate-code normalization matches code", "Dimension Deep",
-              "BLOCKED" if not all(smoke_results.get(name, False) for name in ["DimVendor", "DimPaymentType", "DimRateCode"]) else "NOT RUN",
-              "Dimension Smoke passes; then check configured labels", note="Required Dimension tables are unavailable." if not all(smoke_results.get(name, False) for name in ["DimVendor", "DimPaymentType", "DimRateCode"]) else "Omitted because it is grouped with the large mapping checks.")
-    elif not all(smoke_results.get(name, False) for name in ["DimLocation", "DimVendor", "DimPaymentType", "DimRateCode"]):
-        r.add("DIM-MAP-01", "Stage natural keys map to their Dimensions", "Dimension Deep", "BLOCKED",
-              "Source-based Dimensions pass Smoke before key mapping", note="One or more source-based Dimension tables are absent or unreadable.")
-        r.add("DIM-MAP-02", "Vendor/payment/rate-code normalization matches code", "Dimension Deep", "BLOCKED",
-              "Vendor, PaymentType, and RateCode pass Smoke before label assertions",
-              note="One or more source-based Dimension tables are absent or unreadable.")
-    else:
-        mapping_checks = [
-            ("DIM-MAP-location", 'SELECT count(DISTINCT s.location_id) FROM stage.stg_taxi_zone_lookup s WHERE s.location_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM dds.DimLocation d WHERE d.LocationID=s.location_id)'),
-            ("DIM-MAP-vendor", 'SELECT count(DISTINCT s.vendor_id) FROM stage.stg_yellow_taxi_trips s WHERE s.vendor_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM dds.DimVendor d WHERE d.VendorID=s.vendor_id)'),
-            ("DIM-MAP-payment", 'SELECT count(DISTINCT s.payment_type) FROM stage.stg_yellow_taxi_trips s WHERE s.payment_type IS NOT NULL AND NOT EXISTS (SELECT 1 FROM dds.DimPaymentType d WHERE d.PaymentTypeID=s.payment_type)'),
-            ("DIM-MAP-ratecode", 'SELECT count(DISTINCT coalesce(s.ratecode_id,99)) FROM stage.stg_yellow_taxi_trips s WHERE NOT EXISTS (SELECT 1 FROM dds.DimRateCode d WHERE d.RateCodeID=coalesce(s.ratecode_id,99))'),
-        ]
-        misses = []
-        for test_id, sql in mapping_checks:
-            count = int(query(conn, sql)[0][0])
-            if count:
-                misses.append(f"{test_id}={count}")
-        r.add("DIM-MAP-01", "Stage natural keys map to their Dimensions", "Dimension Deep",
-              "PASS" if not misses else "FAIL", "All observed non-null Stage keys resolve to a Dimension",
-              actual="no missing keys" if not misses else "; ".join(misses))
+    def latest_failed() -> tuple[str, Any]:
+        rows = q(conn, """
+            select source_file_name from control.etl_control
+            qualify row_number() over (partition by source_file_name order by control_id desc) = 1
+               and status <> 'SUCCESS'
+        """)
+        return ("PASS" if not rows else "FAIL"), f"file_có_lượt_cuối_lỗi={[x[0] for x in rows]}"
+    timed(r, "RAW-REC-02", "Lượt nạp gần nhất của mỗi file đều SUCCESS", layer,
+          "Không file nào có lượt nạp cuối cùng FAILED", latest_failed)
 
-        norm = query(conn, '''
-            SELECT
-              (SELECT count(*) FROM dds.DimVendor WHERE VendorID IN (6,7) AND VendorName<>'Unknown'),
-              (SELECT count(*) FROM dds.DimPaymentType WHERE PaymentTypeID=0 AND PaymentTypeName<>'Unknown'),
-              (SELECT count(*) FROM dds.DimRateCode WHERE RateCodeID=99 AND RateCodeName<>'Unknown')
-        ''')[0]
-        bad_vendor, bad_payment, bad_rate = map(int, norm)
-        r.add("DIM-MAP-02", "Vendor/payment/rate-code normalization matches code", "Dimension Deep",
-              "PASS" if bad_vendor + bad_payment + bad_rate == 0 else "FAIL",
-              "Vendor 6/7, payment 0, and ratecode 99 use Unknown labels when present",
-              actual=f"bad_vendor={bad_vendor}; bad_payment={bad_payment}; bad_rate={bad_rate}")
+    def file_counts() -> tuple[str, Any]:
+        n = q1(conn, """
+            with latest as (
+                select source_file_name, rows_loaded from control.etl_control
+                where status = 'SUCCESS' and pipeline_name = 'ingest_yellow_trips'
+                qualify row_number() over (partition by source_file_name order by control_id desc) = 1
+            ), observed as (
+                select source_file_name, count(*) as n from raw.yellow_tripdata group by 1
+            )
+            select count(*) from latest l full join observed o using (source_file_name)
+            where l.rows_loaded is distinct from o.n
+        """)
+        files = q1(conn, "select count(distinct source_file_name) from raw.yellow_tripdata")
+        return ("PASS" if n == 0 else "FAIL"), f"file={files}; file_lệch={n}"
+    timed(r, "RAW-REC-03", "Số dòng raw theo file = lượt nạp SUCCESS gần nhất", layer,
+          "Mỗi file: count(*) trong raw = rows_loaded của lượt nạp cuối", file_counts)
 
-    r.add("DIM-IDEMP-01", "Dimension ETL idempotency in isolated test database", "Dimension Deep", "BLOCKED",
-          "Run twice only in a disposable isolated database",
-          note="No isolated test DB is configured. DDL drops Dimension tables and DML appends rows; neither script was run.")
-    r.add("NEG-FIXTURE-01", "Negative fixtures are detected by assertions", "Dimension Deep", "NOT RUN",
-          "Fixture execution requires a disposable PostgreSQL database",
-          note="No isolated PostgreSQL service is available; no fixture was inserted into real data.")
+    def row_numbers() -> tuple[str, Any]:
+        bad = q(conn, """
+            select source_file_name from raw.yellow_tripdata group by 1
+            having min(source_row_number) <> 1 or max(source_row_number) <> count(*)
+                or sum(source_row_number) <> count(*)::hugeint * (count(*) + 1) / 2
+        """)
+        return ("PASS" if not bad else "FAIL"), f"file_lỗi={[x[0] for x in bad]}"
+    timed(r, "RAW-DUP-01", "source_row_number liên tục 1..N trong mỗi file", layer,
+          "Không nạp trùng, không mất dòng (min = 1, max = N, sum = N(N+1)/2)", row_numbers)
 
 
-def run_deep(r: Reporter, conn: Any, scope: str, stage_smoke_ok: bool,
-             dimension_smoke: dict[str, bool], include_large_scans: bool) -> None:
-    if conn is None:
-        blocked_deep(r, scope, "Smoke Test could not reach the database; dependent Deep Tests were gated.")
+# --------------------------------------------------------------------------- deep: stage
+def deep_stage(r: Reporter, conn: Any, large: bool) -> None:
+    layer = "Deep stage"
+
+    def same_count() -> tuple[str, Any]:
+        raw_n = q1(conn, "select count(*) from raw.yellow_tripdata")
+        stg_n = q1(conn, "select count(*) from stage.stg_yellow_taxi_trips")
+        return ("PASS" if raw_n == stg_n else "FAIL"), f"raw={raw_n:,}; stage={stg_n:,}"
+    timed(r, "STG-REC-01", "Staging giữ đủ dòng của raw", layer, "count(stage) = count(raw)", same_count)
+
+    def zone_unique() -> tuple[str, Any]:
+        dup, nulls = q(conn, """
+            select count(*) - count(distinct location_id), count(*) filter (where location_id is null)
+            from stage.stg_taxi_zone_lookup
+        """)[0]
+        return ("PASS" if dup == nulls == 0 else "FAIL"), f"trùng={dup}; null={nulls}"
+    timed(r, "STG-KEY-01", "location_id của Zone Lookup duy nhất, không NULL", layer, "0 trùng, 0 NULL", zone_unique)
+
+    if not large:
+        r.add("STG-VAL-01", "Thống kê cờ chất lượng staging", layer, "NOT RUN",
+              "Quét toàn bộ view staging; chạy với --include-large-scans")
         return
-    if scope in ("all", "stage"):
-        if stage_smoke_ok:
-            deep_stage(r, conn, include_large_scans)
-        else:
-            for test_id, name in [("STG-SCH-01", "Stage schema contract"), ("STG-CMP-01", "Required audit fields are non-null by schema"),
-                                  ("STG-REC-01", "Successful ETL control rows reconcile"), ("STG-VAL-01", "Stage quality profile metrics"),
-                                  ("STG-DUP-01", "Source row numbers are unique per file"), ("STG-REC-02", "Stage row counts reconcile to latest successful loads")]:
-                r.add(test_id, name, "Stage Deep", "BLOCKED", "Stage Smoke passes first", note="Stage Smoke did not pass.")
-    if scope in ("all", "dimension"):
-        deep_dimension(r, conn, dimension_smoke, include_large_scans)
-    r.add("FACT-INT-01", "Fact integration checks", "Integration", "BLOCKED",
-          "Fact implementation exists before integration tests", note="Fact table/ETL is absent from the tracked repository.")
+
+    def flags() -> tuple[str, Any, str]:
+        cols = [c for c in columns(conn, "stage.stg_yellow_taxi_trips") if c.startswith("is_")]
+        exprs = ", ".join(f"count(*) filter (where {c}) as {c}" for c in cols)
+        null_exprs = " + ".join(f"count(*) filter (where {c} is null)" for c in cols)
+        row = q(conn, f"select count(*), {exprs}, {null_exprs} from stage.stg_yellow_taxi_trips")[0]
+        total, counts, null_flags = row[0], dict(zip(cols, row[1:-1])), row[-1]
+        metrics = {"rows": total, **counts}
+        # Cờ phải luôn true/false; số dòng của từng cờ chỉ được ghi nhận (không có ngưỡng nghiệp vụ).
+        return ("PASS" if null_flags == 0 else "FAIL"), metrics, f"giá_trị_NULL_trong_cờ={null_flags}"
+    timed(r, "STG-VAL-01", "Thống kê cờ chất lượng staging (cờ không NULL)", layer,
+          "Mọi cờ is_* là true/false; ghi nhận số dòng từng cờ", flags)
 
 
+# --------------------------------------------------------------------------- deep: dimension
+def deep_dimension(r: Reporter, conn: Any, smoke: dict[str, bool], large: bool) -> None:
+    layer = "Deep dimension"
+    for d in DIMENSIONS:
+        if not smoke.get(d["name"]):
+            r.add(f"DIM-SCH-{d['name']}", f"{d['name']}: SK, khóa tự nhiên, Unknown", layer, "BLOCKED",
+                  "Smoke của Dimension đạt trước", note="Smoke chưa đạt")
+            continue
+
+        def keys(d: dict[str, Any] = d) -> tuple[str, Any]:
+            nat = ", ".join(d["natural"])
+            null_nat = " or ".join(f"{c} is null" for c in d["natural"])
+            rows, null_sk, dup_sk, null_natural = q(conn, f"""
+                select count(*), count(*) filter (where {d['sk']} is null),
+                       count(*) - count(distinct {d['sk']}), count(*) filter (where {null_nat})
+                from {d['table']}
+            """)[0]
+            dup_nat = q1(conn, f"select count(*) from (select {nat} from {d['table']} group by all having count(*) > 1)")
+            good = null_sk == dup_sk == null_natural == dup_nat == 0
+            if d["expected_count"] is not None:
+                good = good and rows == d["expected_count"]
+            exp = f"; kỳ_vọng_rows={d['expected_count']}" if d["expected_count"] is not None else ""
+            return ("PASS" if good else "FAIL"), \
+                f"rows={rows}{exp}; sk_null={null_sk}; sk_trùng={dup_sk}; nk_null={null_natural}; nk_trùng={dup_nat}"
+        timed(r, f"DIM-SCH-{d['name']}", f"{d['name']}: SK, khóa tự nhiên, số dòng", layer,
+              f"SK và ({', '.join(d['natural'])}) không NULL, không trùng" +
+              (f"; {d['expected_count']} dòng" if d["expected_count"] else ""), keys)
+
+    if smoke.get("DimLocation"):
+        def scd2() -> tuple[str, Any]:
+            bad = q(conn, """
+                with v as (
+                    select locationid, versionno, validfrom, validto, iscurrent,
+                           lead(validfrom) over (partition by locationid order by versionno) as next_from
+                    from dds.dimlocation
+                )
+                select
+                    (select count(*) from (select locationid from v group by 1
+                                           having count(*) filter (where iscurrent) <> 1)),
+                    count(*) filter (where next_from is not null and next_from <> validto),
+                    count(*) filter (where versionno = 1 and validfrom <> timestamp '1900-01-01'),
+                    count(*) filter (where iscurrent and validto <> timestamp '9999-12-31'),
+                    count(*) filter (where versionno > 1)
+                from v
+            """)[0]
+            cur, gap, first, open_to, extra_versions = bad
+            good = cur == gap == first == open_to == 0
+            return ("PASS" if good else "FAIL"), (f"id_sai_số_bản_hiện_hành={cur}; khe_hở/chồng_lấn={gap}; "
+                                                  f"bản_đầu_sai_validfrom={first}; bản_hiện_hành_sai_validto={open_to}; "
+                                                  f"số_phiên_bản_cũ={extra_versions}")
+        timed(r, "DIM-SCD-01", "DimLocation SCD Type 2 hợp lệ", layer,
+              "Mỗi LocationID: đúng 1 bản hiện hành, các bản nối liền, bản đầu từ 1900-01-01", scd2)
+
+        def snapshot_match() -> tuple[str, Any]:
+            snap, dim = q(conn, """
+                select (select count(*) from snapshots.snap_taxi_zone_lookup),
+                       (select count(*) from dds.dimlocation where locationsk <> -1)
+            """)[0]
+            return ("PASS" if snap == dim else "FAIL"), f"snapshot={snap}; dimlocation(trừ Unknown)={dim}"
+        timed(r, "DIM-SCD-02", "DimLocation có đủ mọi phiên bản của snapshot", layer,
+              "Số dòng snapshot = số dòng DimLocation (trừ Unknown)", snapshot_match)
+
+    def labels() -> tuple[str, Any]:
+        v, p, rc = q(conn, """
+            select (select count(*) from dds.dimvendor where vendorid not in (1, 2, -1) and vendorname <> 'Unknown'),
+                   (select count(*) from dds.dimpaymenttype where paymenttypeid = 0 and paymenttypename <> 'Unknown'),
+                   (select count(*) from dds.dimratecode where ratecodeid = 99 and ratecodename <> 'Unknown')
+        """)[0]
+        return ("PASS" if v == p == rc == 0 else "FAIL"), f"vendor_sai={v}; payment_sai={p}; ratecode_sai={rc}"
+    timed(r, "DIM-MAP-02", "Chuẩn hóa nhãn Unknown", layer,
+          "Vendor ngoài 1/2, payment 0, ratecode 99 mang nhãn Unknown", labels)
+
+    if not large:
+        r.add("DIM-MAP-01", "Mọi mã trong staging có trong Dimension", layer, "NOT RUN",
+              "Quét toàn bộ staging; chạy với --include-large-scans")
+        return
+
+    def mapping() -> tuple[str, Any]:
+        misses = q(conn, """
+            select
+              (select count(distinct s.location_id) from stage.stg_taxi_zone_lookup s
+                 where not exists (select 1 from dds.dimlocation d where d.locationid = s.location_id and d.iscurrent)),
+              (select count(distinct vendor_id) from stage.stg_yellow_taxi_trips s where vendor_id is not null
+                 and not exists (select 1 from dds.dimvendor d where d.vendorid = s.vendor_id)),
+              (select count(distinct payment_type) from stage.stg_yellow_taxi_trips s where payment_type is not null
+                 and not exists (select 1 from dds.dimpaymenttype d where d.paymenttypeid = s.payment_type)),
+              (select count(distinct coalesce(ratecode_id, 99)) from stage.stg_yellow_taxi_trips s
+                 where not exists (select 1 from dds.dimratecode d where d.ratecodeid = coalesce(s.ratecode_id, 99)))
+        """)[0]
+        names = ["location", "vendor", "payment", "ratecode"]
+        detail = "; ".join(f"{n}_thiếu={m}" for n, m in zip(names, misses))
+        return ("PASS" if not any(misses) else "FAIL"), detail
+    timed(r, "DIM-MAP-01", "Mọi mã trong staging có trong Dimension", layer,
+          "Location, vendor, payment, ratecode của staging đều có dòng Dimension", mapping)
+
+
+# --------------------------------------------------------------------------- deep: fact
+def deep_fact(r: Reporter, conn: Any, large: bool) -> None:
+    layer = "Deep fact"
+
+    def unknown_keys() -> tuple[str, Any]:
+        exprs = ", ".join(f"count(*) filter (where {k} = -1) as {k}" for k in FACT_KEYS)
+        row = q(conn, f"select {exprs} from dds.facttaxitrip")[0]
+        counts = {k: v for k, v in zip(FACT_KEYS, row) if v}
+        return ("PASS" if not counts else "FAIL"), (counts or "không có khóa -1")
+    timed(r, "FACT-KEY-01", "Fact không có khóa Unknown (-1)", layer,
+          "0 dòng -1 ở cả 11 khóa (sau khi thêm nhóm NONE và mở rộng DimDate)", unknown_keys)
+
+    def measures() -> tuple[str, Any]:
+        row = q(conn, """
+            select count(*) filter (where totaltrips <> 1),
+                   count(*) filter (where dropoffdatetime <= pickupdatetime),
+                   count(*) filter (where pickupdatetime < timestamp '2024-01-01' or pickupdatetime >= timestamp '2026-01-01'),
+                   count(*) filter (where fareamount < 0 or totalamount < 0 or tripdistance < 0),
+                   count(*) filter (where totalamount is null or fareamount is null)
+            from dds.facttaxitrip
+        """)[0]
+        names = ["totaltrips_khác_1", "trả_không_sau_đón", "đón_ngoài_2024_2025", "giá_trị_âm", "tiền_null"]
+        detail = dict(zip(names, row))
+        return ("PASS" if not any(row) else "FAIL"), detail
+    timed(r, "FACT-VAL-01", "Measure của Fact tuân thủ quy tắc is_valid_for_fact", layer,
+          "TotalTrips = 1; trả sau đón; đón trong 2024–2025; tiền, quãng đường không âm", measures)
+
+    if not large:
+        for test_id, name in [("FACT-REC-01", "Fact theo file khớp staging is_valid_for_fact"),
+                              ("FACT-REF-01", "Mọi khóa của Fact có trong Dimension")]:
+            r.add(test_id, name, layer, "NOT RUN", "Quét toàn bộ staging/Fact; chạy với --include-large-scans")
+        return
+
+    def per_file() -> tuple[str, Any]:
+        rows = q(conn, """
+            with s as (select source_file_name f, count(*) n, sum(source_row_number) rn
+                       from stage.stg_yellow_taxi_trips where is_valid_for_fact group by 1),
+                 t as (select sourcefilename f, count(*) n, sum(sourcerownumber) rn
+                       from dds.facttaxitrip group by 1)
+            select coalesce(s.f, t.f), s.n, t.n from s full join t on s.f = t.f
+            where s.n is distinct from t.n or s.rn is distinct from t.rn
+        """)
+        total = q1(conn, "select count(*) from dds.facttaxitrip")
+        return ("PASS" if not rows else "FAIL"), f"fact_rows={total:,}; file_lệch={rows}"
+    # So cả số dòng và tổng source_row_number theo file: bắt nạp trùng, mất dòng do join, dòng bị
+    # thay bằng dòng khác, file thiếu/thừa. Rẻ hơn nhiều so với đếm distinct (file, row) trên ~85 triệu dòng.
+    timed(r, "FACT-REC-01", "Fact theo file khớp staging is_valid_for_fact", layer,
+          "Mỗi file: số dòng và tổng sourcerownumber bằng staging", per_file)
+
+    def references() -> tuple[str, Any]:
+        orphans = {}
+        for key, (dim, sk) in FACT_KEYS.items():
+            n = q1(conn, f"select count(*) from dds.facttaxitrip f anti join {dim} d on d.{sk} = f.{key}")
+            if n:
+                orphans[key] = n
+        return ("PASS" if not orphans else "FAIL"), (orphans or "không có khóa mồ côi")
+    timed(r, "FACT-REF-01", "Mọi khóa của Fact có trong Dimension", layer,
+          "0 khóa mồ côi ở cả 11 khóa ngoại", references)
+
+
+# --------------------------------------------------------------------------- deep: olap
+def deep_olap(r: Reporter, conn: Any) -> None:
+    layer = "Deep olap"
+
+    def reconcile() -> tuple[str, Any]:
+        f_trips, f_pax, f_rev = q(conn, """
+            select sum(totaltrips), sum(passengercount), sum(totalamount) from dds.facttaxitrip
+        """)[0]
+        bad = {}
+        marts = [(m, "") for m in ["mart_trips_daily", "mart_routes_monthly", "mart_trip_profile", "mart_monthly_kpi"]]
+        marts += [("mart_hourly_activity", "pickup"), ("mart_hourly_activity", "dropoff")]
+        for mart, role in marts:
+            where = f"where activity_role = '{role}'" if role else ""
+            trips, pax, rev = q(conn, f"""
+                select sum(total_trips), sum(total_passengers), sum(total_revenue) from olap.{mart} {where}
+            """)[0]
+            if trips != f_trips or pax != f_pax or rev is None or abs(rev - f_rev) >= 1:
+                bad[f"{mart}{':' + role if role else ''}"] = {"trips": trips, "passengers": pax, "revenue": rev}
+        return ("PASS" if not bad else "FAIL"), (bad or f"trips={f_trips:,}; revenue={f_rev:,.2f} khớp ở 6 mục")
+    timed(r, "OLAP-REC-01", "Tổng của mọi mart khớp Fact", layer,
+          "Số chuyến, hành khách bằng nhau; doanh thu lệch < 1 USD", reconcile)
+
+    def kpi_months() -> tuple[str, Any]:
+        n, dup, first, last, gaps = q(conn, """
+            select count(*), count(*) - count(distinct month_start), min(month_start), max(month_start),
+                   count(*) filter (where month_start > (select min(month_start) from olap.mart_monthly_kpi)
+                                      and prev_month_trips is null)
+            from olap.mart_monthly_kpi
+        """)[0]
+        return ("PASS" if dup == 0 and gaps == 0 else "FAIL"), \
+            f"tháng={n}; từ={first}; đến={last}; trùng={dup}; tháng_thiếu_kỳ_trước={gaps}"
+    timed(r, "OLAP-KPI-01", "mart_monthly_kpi: tháng duy nhất, liên tục", layer,
+          "Không trùng tháng; mọi tháng (trừ tháng đầu) có số liệu tháng trước", kpi_months)
+
+
+# --------------------------------------------------------------------------- main
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Read-only NYC Taxi Stage/Dimension QA runner")
-    parser.add_argument("--suite", choices=["preflight", "smoke", "deep", "all", "static"], default="smoke")
-    parser.add_argument("--scope", choices=["all", "stage", "dimension"], default="all")
+    parser = argparse.ArgumentParser(description="Runner QA chỉ đọc cho kho NYC Taxi trên DuckDB")
+    parser.add_argument("--suite", choices=["static", "preflight", "smoke", "deep", "all"], default="smoke")
+    parser.add_argument("--scope", choices=["all", *SCOPES], default="all")
     parser.add_argument("--include-large-scans", action="store_true",
-                        help="Run full-table Stage profiling, duplicate, reconciliation, and key-mapping queries")
+                        help="Chạy các kiểm tra quét toàn bộ staging/Fact (thống kê cờ, ánh xạ mã, đối chiếu theo file)")
     args = parser.parse_args()
-    reporter = Reporter(args.suite, args.scope, args.include_large_scans)
-    run_static_preflight(reporter)
-    if args.suite == "static":
-        pass
-    elif args.suite == "preflight":
-        if not is_container():
-            env = parse_env_file()
-            services = get_running_compose_services(reporter, env.get("POSTGRES_PASSWORD"))
-            if services is not None and "postgres" not in services:
-                reporter.add("PF-DB-CONNECT", "Connect to PostgreSQL", "Preflight", "BLOCKED",
-                             "Connection succeeds using configured settings", note="Postgres service is not running; connection was not attempted.")
-                reporter.add("PF-DB-READONLY", "Read-only transaction enforced", "Preflight", "BLOCKED",
-                             "transaction_read_only=on", note="No database connection")
-            else:
-                open_readonly_connection(reporter)
-        else:
-            open_readonly_connection(reporter)
-    else:
-        conn = None
-        if not is_container():
-            env = parse_env_file()
-            services = get_running_compose_services(reporter, env.get("POSTGRES_PASSWORD"))
-            if services is None or "postgres" not in services:
-                reporter.add("PF-DB-CONNECT", "Connect to PostgreSQL", "Preflight", "BLOCKED",
-                             "Connection succeeds using configured settings", note="Postgres service is not running or Docker status is unavailable; connection was not attempted.")
-                reporter.add("PF-DB-READONLY", "Read-only transaction enforced", "Preflight", "BLOCKED",
-                             "transaction_read_only=on", note="No database connection")
-            else:
-                conn = open_readonly_connection(reporter)
-        else:
-            conn = open_readonly_connection(reporter)
+    scopes = SCOPES if args.scope == "all" else [args.scope]
+    large = args.include_large_scans
 
-        smoke_ok = False
-        dim_smoke: dict[str, bool] = {}
-        if args.suite in ("smoke", "deep", "all"):
-            smoke_ok, dim_smoke = run_smoke(reporter, conn, args.scope)
+    r = Reporter(args.suite, args.scope, large)
+    run_static_preflight(r)
+    conn = None
+    if args.suite != "static":
+        conn = open_readonly_connection(r)
+    if conn is not None and args.suite in ("smoke", "deep", "all"):
+        smoke = run_smoke(r, conn, scopes)
         if args.suite in ("deep", "all"):
-            run_deep(reporter, conn, args.scope, smoke_ok, dim_smoke, args.include_large_scans)
-        if conn is not None:
-            try:
-                conn.rollback()
-                conn.close()
-            except Exception:
-                pass
+            # Gate: chỉ chạy deep của một tầng khi mọi bảng của tầng đó qua smoke.
+            gates = {
+                "raw": all(smoke.get(x) for x in RELATIONS["raw"]),
+                "stage": all(smoke.get(x) for x in RELATIONS["raw"] + RELATIONS["stage"]),
+                "fact": all(smoke.get(x) for x in RELATIONS["stage"] + RELATIONS["fact"])
+                        and all(smoke.get(d["name"]) for d in DIMENSIONS),
+                "olap": all(smoke.get(x) for x in RELATIONS["fact"] + RELATIONS["olap"]),
+            }
+            runners = [("raw", lambda: deep_raw(r, conn, large)), ("stage", lambda: deep_stage(r, conn, large)),
+                       ("dimension", lambda: deep_dimension(r, conn, smoke, large)),
+                       ("fact", lambda: deep_fact(r, conn, large)), ("olap", lambda: deep_olap(r, conn))]
+            for scope, run in runners:
+                if scope not in scopes:
+                    continue
+                if gates.get(scope, True):
+                    run()
+                else:
+                    r.add(f"DEEP-{scope.upper()}", f"Kiểm tra deep tầng {scope}", f"Deep {scope}", "BLOCKED",
+                          "Smoke của tầng (và tầng phụ thuộc) đạt trước", note="Smoke chưa đạt")
+    elif conn is None and args.suite in ("smoke", "deep", "all"):
+        r.add("SM-ALL", "Smoke/deep", "Smoke", "BLOCKED", "Mở được database", note="Preflight không mở được database")
+    if conn is not None:
+        conn.close()
 
-    json_path, md_path = reporter.save()
-    print(f"Suite: {reporter.suite}; scope: {reporter.scope}; overall: {reporter.overall()}")
-    print("Counts: " + ", ".join(f"{key}={value}" for key, value in reporter.counts().items()))
+    json_path, md_path = r.save()
+    print(f"Suite: {r.suite}; phạm vi: {r.scope}; quét lớn: {large}; kết quả: {r.overall()}")
+    print("Số lượng: " + ", ".join(f"{k}={v}" for k, v in r.counts().items()))
+    for t in r.tests:
+        if t["status"] in ("FAIL", "BLOCKED"):
+            print(f"  {t['status']}: {t['test_id']} {t['name']} -> {t['actual']} {t['note']}")
     print(f"JSON: {json_path.relative_to(ROOT)}")
     print(f"Markdown: {md_path.relative_to(ROOT)}")
-    return 1 if reporter.counts()["FAIL"] else (2 if reporter.counts()["BLOCKED"] else 0)
+    c = r.counts()
+    return 1 if c["FAIL"] else (2 if c["BLOCKED"] else 0)
 
 
 if __name__ == "__main__":
