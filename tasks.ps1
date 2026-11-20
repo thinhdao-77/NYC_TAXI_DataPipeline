@@ -12,7 +12,7 @@ param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'up', 'down', 'ps', 'logs', 'shell', 'sql', 'download-raw',
                  'ingest-zones', 'ingest', 'profile', 'dbt-deps', 'dbt-run', 'dbt-test',
-                 'dbt-build', 'qa', 'prune-branches')]
+                 'dbt-build', 'qa', 'export-bi', 'build-map', 'prune-branches')]
     [string]$Task = 'help',
 
     [Parameter(Position = 1)]
@@ -60,6 +60,8 @@ Tasks:
                                     Chạy dbt trong container Mage (vd: dbt-build dim_vendor)
   qa [preflight|smoke|deep|all|full]
                                     Runner QA chỉ đọc trên DuckDB (mặc định smoke; full = all + quét lớn)
+  export-bi                         Xuất OLAP mart + Dimension ra data/bi/*.parquet cho Power BI
+  build-map                         Dựng lại powerbi/map_shapes (TopoJSON, tâm khu vực) từ shapefile
   prune-branches                    Xóa nhánh local mà nhánh remote đã bị xóa (sau khi merge PR)
 '@
     }
@@ -97,6 +99,8 @@ Tasks:
         $qaArgs = if ($suite -eq 'full') { @('--suite', 'all', '--include-large-scans') } else { @('--suite', $suite) }
         docker compose exec -T mage python /home/src/tests/run_quality_tests.py @qaArgs
     }
+    'export-bi' { docker compose exec -T mage python /home/src/powerbi/scripts/export_bi.py }
+    'build-map' { docker compose exec -T mage python /home/src/powerbi/scripts/build_map_shapes.py }
     'prune-branches' {
         git fetch --prune origin
         $current = git branch --show-current
