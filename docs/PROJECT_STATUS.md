@@ -25,12 +25,12 @@ Parquet nguồn → Mage ingestion → DuckDB (`raw`) → dbt staging → Dimens
 | Runner QA (DuckDB) | **Hoàn thành, đã chạy** | `tests/run_quality_tests.py` viết lại cho DuckDB (read_only), kiểm tra xuyên tầng raw → stage → dds → olap; `.\tasks.ps1 qa full`: 53 PASS, 0 FAIL, ~32 s. Hướng dẫn: [guides/testing.md](guides/testing.md) |
 | Test plan + log | Một phần | `docs/02_test_plans_and_logs/`: test plan viết cho giai đoạn PostgreSQL; bản chạy mẫu `run_20261118T115030Z` (DuckDB) và `run_20261026T034420Z` (PostgreSQL cũ) |
 | CI / tự động hóa GitHub | **Hoàn thành, đã chạy thật trên GitHub** | `ci.yml` chạy khi push mọi nhánh; `auto-pr.yml` tự mở PR vào `main`; repo tự xóa nhánh sau khi merge |
-| Lệnh tiện ích | Hoàn thành | `tasks.ps1` (up/down/shell/sql/ingest-zones/ingest/profile/dbt-*/qa/prune-branches) |
+| Lệnh tiện ích | Hoàn thành | `tasks.ps1` (up/down/shell/sql/ingest-zones/ingest/profile/dbt-*/qa/export-bi/build-map/prune-branches) |
 | Báo cáo thành phần | Một phần | `docs/03_reports/sections/` (Vân, Khoa) |
 | Data modeling docs | Một phần | `docs/01_data_modeling/modeling.pdf` (Giai đoạn 1 của nhóm: business event, 8 Dimension, Fact, measures, truy vấn kiểm chứng Star Schema); sơ đồ Star Schema chỉ có qua link Google Drive trong PDF |
 | OLAP mart | **Hoàn thành, chạy trên DuckDB** | 5 mart trong schema `olap` (`mart_trips_daily`, `mart_hourly_activity`, `mart_routes_monthly`, `mart_trip_profile`, `mart_monthly_kpi`) phục vụ A1–A8, B1–B5 của modeling.pdf; tổng khớp Fact. Hướng dẫn: [guides/olap.md](guides/olap.md) |
 | Pipeline ELT end-to-end | **Chưa có** | Cần pipeline Mage: ingest → `dbt build` |
-| Power BI | **Chưa có** | `powerbi/` rỗng |
+| Power BI | **Đã chuẩn bị, chờ dựng báo cáo** | `.\tasks.ps1 export-bi` xuất 5 mart + 7 Dimension ra `data/bi/*.parquet`; `powerbi/queries/*.pq` (Power Query), `powerbi/dax/measures.dax` (119 measure), `powerbi/map_shapes/` (TopoJSON 263 zone + tâm khu vực); hướng dẫn dựng model và 7 trang báo cáo: [guides/powerbi.md](guides/powerbi.md). File `.pbix` do người dùng dựng trong Power BI Desktop |
 
 ## 3. Chi tiết phần đã làm
 
@@ -76,7 +76,8 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 8. ~~`sources.yml` trỏ bảng PostgreSQL cũ~~: đã xử lý ở bước 3 (`sources.yml` trỏ `raw.*`, DDS đọc staging qua `ref()`).
 10. `is_total_mismatch` dựa trên quy luật quan sát từ dữ liệu (`extra` đã gồm phụ phí ở nhiều dòng), không phải định nghĩa chính thức của TLC; còn 384.360 dòng lệch thật (0,43%) chưa phân tích nguyên nhân.
 9. DuckDB không tự thu hồi chỗ của dòng đã xóa khi nạp lại một file; nạp lại nhiều lần làm file phình. Thu gọn bằng `COPY FROM DATABASE` sang file mới khi cần.
-7. `data/reference/taxi_zones.zip` (nhị phân) vẫn nằm trong git.
+7. `data/reference/taxi_zones.zip` (nhị phân) vẫn nằm trong git; nay là nguồn của `powerbi/map_shapes/` (`tasks.ps1 build-map`) nên giữ lại.
+13. Báo cáo Power BI chưa được dựng và kiểm chứng trên Power BI Desktop: truy vấn M và measure DAX mới được kiểm tra tự động (mọi cột tham chiếu tồn tại trong file xuất), chưa chạy trong Power BI. Shape map là tính năng preview của Power BI.
 
 ## 5. Cấu trúc thư mục hiện tại
 
@@ -91,10 +92,10 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 │   ├── profiling/            # truy vấn kiểm tra dữ liệu nguồn
 │   └── warehouse/            # SQL thủ công Dimension/Fact (tham khảo)
 ├── tests/                    # runner QA chỉ đọc
-├── powerbi/
+├── powerbi/                  # scripts/ (export_bi, build_map_shapes), queries/ (M), dax/measures.dax, map_shapes/
 ├── docs/
 │   ├── PROJECT_STATUS.md     # file này
-│   ├── guides/               # ingestion, staging, dimension, dimension_handover, fact, olap, testing
+│   ├── guides/               # ingestion, staging, dimension, dimension_handover, fact, olap, testing, powerbi
 │   ├── 01_data_modeling/
 │   ├── 02_test_plans_and_logs/
 │   └── 03_reports/
@@ -103,14 +104,191 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 
 ## 6. Việc nên làm tiếp
 
-1. Tiếp tục chuyển sang DuckDB: bước 6 (Power BI), xem [mục 8](#8-chuyển-sang-duckdb).
+1. Dựng báo cáo Power BI theo [guides/powerbi.md](guides/powerbi.md), đối chiếu số liệu ở mục 5 của hướng dẫn, lưu `powerbi/nyc_taxi.pbit` và ảnh chụp dashboard cho README.
 2. Quyết định giữ hay bỏ `sql/warehouse/`; thống nhất `TripSK` cho Fact.
 3. Chuyển nội dung `modeling.pdf` thành markdown + ERD trong repo (sơ đồ hiện chỉ có qua link Google Drive) và bổ sung data dictionary.
 4. ~~Xây OLAP mart~~: xong ở bước 5.
 5. Pipeline Mage end-to-end: ingest → `dbt build`.
-6. Dashboard Power BI.
+6. ~~Chuẩn bị dữ liệu Power BI~~: xong ở bước 6; còn dựng dashboard (việc 1).
 
 ## 7. Nhật ký thay đổi
+
+### 18/11/2026 — DuckDB bước 6: Power BI (chuẩn bị dữ liệu, model, measure)
+- Người dùng chọn: Power BI đọc **Parquet xuất từ DuckDB** (không cài ODBC, không giữ khóa file DuckDB) và **chỉ chuẩn bị file DAX/M + hướng dẫn** (tự dựng `.pbix`).
+- `powerbi/scripts/export_bi.py` (`.\tasks.ps1 export-bi`): mở DuckDB read_only, `COPY` 5 mart + 7 Dimension (không xuất Fact) ra `data/bi/*.parquet` (zstd), ghi file tạm rồi đổi tên, kiểm tra số dòng ghi ra = nguồn, ghi `_manifest.json`. `data/bi/` và `powerbi/*.pbix` thêm vào `.gitignore`.
+- `powerbi/scripts/build_map_shapes.py` (`.\tasks.ps1 build-map`): extension `spatial` của DuckDB đọc `data/reference/taxi_zones.zip`, đơn giản hóa 30 feet trong EPSG:2263, chuyển sang WGS84, ghi `powerbi/map_shapes/taxi_zones.topojson` (263 khu vực, 354 arc, 14.821 điểm, 331 KB; TopoJSON không lượng tử hóa, mỗi vòng biên một arc) và `taxi_zone_centroids.csv` (tâm khu vực). Hai file này được commit.
+- `powerbi/queries/*.pq`: 14 truy vấn M (tham số `RepoFolder`, 8 Dimension gồm `DimMonth` dựng từ `DimDate`, 5 mart). `DimDate` bỏ dòng Unknown để đánh dấu Date table; thêm `monthkey` cho mart tháng; `DimLocation` gắn tọa độ tâm; `RoutesMonthly` thêm cột `route`.
+- `powerbi/dax/measures.dax`: 55 measure dạng `DEFINE MEASURE` (dán vào DAX query view, Update model): chuyến, doanh thu, trung bình tính từ tổng cộng dồn, thành phần doanh thu, MoM/YoY (time intelligence trên `DimDate`), B2 tháng 6 so với tháng 5, đón/trả theo vai trò, hạng tuyến, lượt đón/trả theo khu vực (`USERELATIONSHIP` cho quan hệ dropoff), hồ sơ chuyến, KPI tháng; kèm `EVALUATE` kiểm tra tổng.
+- `docs/guides/powerbi.md` (mới): xuất dữ liệu, tạo truy vấn, bảng quan hệ (DimMonth → DimDate → mart ngày; DimMonth → mart tháng; quan hệ dropoff inactive), Mark as date table, Sort by column, ẩn cột, measure, 7 trang báo cáo theo câu A1–B5, Shape map/bản đồ bong bóng, bảng giá trị đối chiếu, lưu `.pbit`.
+- `tasks.ps1`: thêm `export-bi`, `build-map`. CI: `compileall` thêm thư mục `powerbi`.
+- **Kiểm tra (đạt):**
+  - `export-bi`: 12 file, ~110 MB, ~5 s; số dòng khớp nguồn (`mart_trips_daily` 1.411.379, `mart_routes_monthly` 823.930, `dimdate` 763...). Chạy được qua `.\tasks.ps1 export-bi`.
+  - `build-map`: TopoJSON hợp lệ về cấu trúc (263 LocationID 1..263 không trùng, mọi chỉ số arc hợp lệ, mọi vòng khép kín, kinh độ −74,256..−73,700, vĩ độ 40,496..40,916); tâm khu vực 1 (Newark Airport) = 40,6918; −74,1740.
+  - Kiểm tra tự động trên file Parquet đã xuất: 116 tham chiếu `Bảng[cột]` trong DAX, mọi cột dùng trong M và 19 cột khóa quan hệ đều tồn tại; không có tham chiếu measure chưa định nghĩa.
+  - Giá trị đối chiếu (mục 5 của hướng dẫn) tính bằng SQL trên mart: 85.745.246 chuyến; 2.475.529.050,41 USD; 28,87 USD/chuyến; 10,94 mph; tỷ lệ boa 21,88%; tháng 6/2025 so với 5/2025 −4,40%.
+  - `tasks.ps1` parse OK; `compileall` OK.
+  - **Chưa kiểm chứng trong Power BI Desktop** (rủi ro số 13).
+
+### 19/11/2026 — Sửa measure DAX sau khi chạy thử trong Power BI Desktop
+- Người dùng dựng model theo `docs/guides/powerbi.md` mục 2.1–2.4 và chạy truy vấn kiểm tra `SUMMARIZECOLUMNS(DimMonth[year], ...)`. Đúng: `Trips` 2024 = 40.422.347, 2025 = 45.322.899; `Revenue` 1.162.091.225,73 / 1.313.437.824,68; `Revenue YoY %` 2025 = 13%; `Route Trips`, `Profile Trips` khớp `Trips` theo năm (quan hệ 2.2 đúng).
+- **Lỗi 1:** `Revenue May` / `Revenue June` ra 230.228.624,18 / 218.020.293,79 ở mọi năm (= tổng tháng 5, tháng 6 của 2024 + 2025). Nguyên nhân: `REMOVEFILTERS ( DimDate )` xóa bộ lọc trên bảng mở rộng của `DimDate`, gồm cả `DimMonth` (DimDate ở phía nhiều của quan hệ DimMonth → DimDate), nên mất bộ lọc năm. Sửa: chỉ xóa bộ lọc các cột mức tháng/ngày của `DimMonth` và `DimDate`, giữ cột năm; thêm `HASONEVALUE ( DimMonth[year] )` để chỉ tính khi đang xét một năm.
+- **Lỗi 2:** `Revenue YoY %` năm 2026 = −100% (2026 không có chuyến đón, doanh thu BLANK so với 2025). Sửa: `Revenue MoM %`, `Revenue YoY %`, `Trips YoY %` trả BLANK khi kỳ hiện tại không có dữ liệu.
+- Kỳ vọng sau khi sửa: 2024 `Revenue May` 106.909.224,54, `Revenue June` 100.121.367,53, −6,35%; 2025 123.319.399,64, 117.898.926,26, −4,40%; dòng 2026 không còn xuất hiện. Chờ người dùng chạy lại để xác nhận.
+- `docs/guides/powerbi.md` trang 4: ma trận nhiệt dùng `DimDate[dayname]` thay `HourlyActivity[dayname]` (cột này bị ẩn theo mục 2.3).
+
+### 19/11/2026 — Thiết kế dashboard Power BI: hệ thống thiết kế + trang 1
+- Theo các nguyên tắc trực quan hóa người dùng đưa ra (thuộc tính tiền chú ý, màu có mục đích và thân thiện người mù màu, trục từ 0 cho cột/thanh, tránh pie/donut, thông tin quan trọng bên trái, không xoay chữ, phân cấp chữ, mọi quyết định là đánh đổi).
+- Mới `docs/guides/powerbi_design.md`: bảng áp dụng 6 nguyên tắc; hệ màu (trung tính, chính `#1F5AA6`, nhấn `#E69F00`, tăng xanh dương ▲ / giảm cam `#C65A00` ▼, tuần tự xanh dương, phân kỳ cam–xám–xanh dương, danh mục Okabe–Ito); cỡ chữ Segoe UI; lưới 1280 × 720 với thanh bộ lọc trái 200 px; **đặc tả trang 1** (A1, A6, A8): 4 KPI card, 3 biểu đồ đường small multiples chung trục thời gian, bảng theo quận có data bar từ 0, tọa độ từng visual, tương tác, đánh đổi, số liệu đối chiếu.
+- Mới `powerbi/theme/nyc_taxi_theme.json` (bảng màu, màu tăng/giảm, tuần tự, cỡ chữ, tắt tiêu đề trục).
+- `powerbi/queries/DimDate.pq`: thêm cột `monthstart` (date) cho hierarchy `year > monthstart > fulldate` (trục thời gian liên tục, nhãn ngang).
+- `powerbi/dax/measures.dax`: `Revenue YoY %`, `Trips YoY %` chỉ tính khi chọn đúng một năm (`HASONEVALUE ( DimMonth[year] )`; chọn cả hai năm thì `SAMEPERIODLASTYEAR` trộn kỳ); thêm `Avg Revenue per Trip PY`, `Avg Revenue per Trip YoY %`, `Trips Without Passenger %`, `Borough Text Color` (59 measure).
+- **Phát hiện chất lượng dữ liệu (đo trên mart):** tỷ lệ chuyến không ghi nhận số hành khách 10,79% (2024) → 21,67% (2025); tổng hành khách 2025 giảm 4,80% trong khi số chuyến tăng 12,12%. Trang 1 không hiện YoY hành khách mà hiện tỷ lệ thiếu dữ liệu.
+- Số liệu đối chiếu trang 1 tính bằng SQL trên `olap.mart_trips_daily`: theo năm (chuyến, hành khách, doanh thu, doanh thu/chuyến, YoY: 12,12% / 13,02% / 0,80%) và theo quận (8 dòng).
+- Chưa kiểm chứng trong Power BI Desktop: chờ người dùng dựng trang 1.
+
+### 19/11/2026 — Giao diện dashboard bằng tiếng Anh
+- Người dùng yêu cầu toàn bộ chữ hiển thị trên dashboard bằng tiếng Anh (tài liệu vẫn tiếng Việt theo quy ước repo).
+- **Dữ liệu:** `dim_passenger_group` đổi nhãn sang `No passenger count`, `1 passenger`, `2-4 passengers`, `5+ passengers`; `dim_distance_group` sang `Under 2 miles`, `2-5 miles`, `Over 5 miles` (mã `*code`, SK, khoảng giá trị không đổi nên Fact không cần build lại). Các Dimension khác vốn đã tiếng Anh (tên tháng/thứ từ `strftime`, vendor, payment, rate code, zone).
+- **Tài liệu thiết kế** `docs/guides/powerbi_design.md`: tiêu đề, phụ đề, nhãn KPI, nhãn so sánh, tiêu đề biểu đồ, tiêu đề cột bảng, header slicer, chú thích, sơ đồ bố cục trang 1 chuyển sang tiếng Anh; thêm tên 7 trang (`Overview`, `Revenue by Zone & Vendor`, `Payment Methods`, `Pickup & Dropoff Timing`, `Trip Profile`, `Routes & Map`, `Trends & Comparisons`) và hướng dẫn đặt locale English (United States) để định dạng số kiểu Mỹ.
+- **Kiểm tra (đạt):** `dbt build --select dim_passenger_group dim_distance_group mart_trip_profile`: 3 model + test, 16/16 PASS; `export-bi` chạy lại; quét mọi cột VARCHAR của 12 file Parquet xuất ra: không còn ký tự ngoài ASCII.
+
+### 19/11/2026 — Thiết kế dashboard trang 2: Revenue by Zone & Vendor (A2, 5b)
+- `docs/guides/powerbi_design.md` mục 6 (mới):
+  - 4 KPI card: Revenue + YoY; khu vực đón dẫn đầu; tỷ trọng hãng dẫn đầu; giờ cao điểm doanh thu.
+  - V1: thanh ngang chồng theo hãng, Top 10 khu vực, trục từ 0, màu xanh–cam.
+  - V2: matrix quận > khu vực × hãng, data bar từ 0 và tỷ trọng hãng trong dòng.
+  - V3: heatmap quận × giờ, tô theo tỷ trọng doanh thu trong ngày của từng quận, bảng màu tuần tự.
+  - Kèm tọa độ, tương tác, đánh đổi, số liệu đối chiếu.
+  - Bỏ slicer `timeslot` của phác thảo ban đầu.
+- `powerbi/dax/measures.dax`: thêm 9 measure, tổng 68 (không trùng tên): `Vendor Revenue Share`, `Top Zone`, `Top Zone Revenue Share`, `Leading Vendor`, `Leading Vendor Share`, `Pickup Revenue (Borough)`, `Pickup Revenue Hour Share`, `Peak Revenue Hour`, `Peak Hour Revenue Share`.
+  - `Pickup Revenue (Borough)` dùng `TREATAS` vì `HourlyActivity[borough]` không nối `DimLocation`, nên slicer quận trước đây không lọc được dữ liệu theo giờ.
+- **Phát hiện:**
+  - Hai sân bay JFK và LaGuardia chiếm 19,7% doanh thu.
+  - VeriFone chiếm 78,6% doanh thu; Bronx là quận duy nhất CMT dẫn (55,2%).
+  - Giờ cao điểm doanh thu: Manhattan 18h, Queens 16h, Brooklyn 8h, Bronx 7h.
+- **Kiểm tra:**
+  - Số liệu đối chiếu tính bằng SQL (duckdb 1.5.6 cài tạm ngoài repo) trên các file Parquet đã xuất `data/bi/`, vì Docker không chạy: tổng/Top 10 khu vực, hãng theo năm và quận, giờ cao điểm, tỷ trọng giờ theo quận.
+  - DAX: chỉ kiểm tra tên cột tồn tại và tên measure không trùng.
+  - **Chưa chạy trong Power BI Desktop.**
+- **Sửa sau khi người dùng chạy thử (cùng ngày):**
+  - Lỗi: heatmap V3 cho cả 4 dòng giống hệt nhau, đều là phân bố chung toàn thành phố (17h–18h 7,1%).
+  - Nguyên nhân: `TREATAS` làm đối số filter của `CALCULATE` ghi đè bộ lọc dòng matrix trên cùng cột `HourlyActivity[borough]`.
+  - Sửa: `Pickup Revenue (Borough)` bọc `KEEPFILTERS ( TREATAS ( ... ) )`.
+  - Kỳ vọng sau khi sửa: Manhattan đậm nhất 18h 7,5%; Queens 16h 7,8%; Brooklyn 8h 6,4%; Bronx 7h 9,7%. Chờ người dùng xác nhận.
+
+### 19/11/2026 — Thiết kế dashboard trang 3: Payment Methods (A3)
+- **Thiết kế** `docs/guides/powerbi_design.md` mục 7 (mới):
+  - 4 KPI card hiện tỷ trọng thẻ, tiền mặt, Unknown và tỷ lệ boa thẻ. Thay đổi so với năm trước tính bằng **điểm phần trăm**, màu trung tính.
+  - V1: đường tỷ trọng theo tháng (Credit card, Cash, Unknown), trục từ 0. Thay cho cột chồng 100% của phác thảo ban đầu.
+  - V2: thanh chồng 100% theo 4 quận, Unknown ở mép phải.
+  - V3: bảng tổng hợp có data bar.
+  - Kèm tương tác, đánh đổi, số liệu đối chiếu.
+- **Truy vấn** `powerbi/queries/DimPaymentType.pq`: thêm cột `paymentorder` làm *Sort by column* cho `paymenttypename`. Không sắp theo `paymenttypeid` được vì Unknown ứng với các mã −1, 0, 5. `docs/guides/powerbi.md` mục 2.1 và 2.3 cập nhật theo.
+- **Measure** `powerbi/dax/measures.dax`: thêm 8 measure, tổng 76, không trùng tên.
+  - `Payment Trip Share`, `Card Trip Share`, `Cash Trip Share`, `Unknown Payment Share`;
+  - 4 measure `* Change (pp)`, chỉ tính khi chọn một năm.
+  - Gom khối measure trang 2 lại liền nhau.
+- **Phát hiện:**
+  - Mã thanh toán 0 (Unknown, TLC gọi là Flex Fare) tăng từ 9,8% số chuyến (2024) lên 21,1% (2025); tháng 12/2025 là 28,5%.
+  - Toàn bộ 13.525.377 chuyến mã 0 đều thiếu số khách và mã giá. Đây chính là nguồn gây thiếu số hành khách ở trang 1.
+  - Ở Brooklyn và Bronx, Unknown chiếm 63,5% và 55,3% số chuyến.
+- **Kiểm tra:**
+  - Số liệu đối chiếu tính bằng SQL trên các file Parquet trong `data/bi/` (duckdb tạm ngoài repo).
+  - Chưa chạy trong Power BI Desktop.
+
+### 19/11/2026 — Thiết kế dashboard trang 4: Pickup & Dropoff Timing (A4)
+- **Thiết kế** `docs/guides/powerbi_design.md` mục 8 (mới), đơn vị chung là **trung bình mỗi ngày**:
+  - 4 KPI card: giờ cao điểm đón, giờ cao điểm trả, ngày đông nhất, lượt đón mỗi ngày + YoY;
+  - V1: 2 đường đón/trả theo giờ, trục từ 0;
+  - V2: cột chênh lệch đón − trả theo giờ, small multiples cho Manhattan, Queens, Brooklyn, chung trục, màu phân kỳ;
+  - V3: heatmap thứ × giờ.
+  - Kèm tương tác, đánh đổi, số liệu đối chiếu.
+- **Measure** `powerbi/dax/measures.dax`: thêm 14 measure, tổng 90, không trùng tên.
+  - `Pickups (Borough)`, `Dropoffs (Borough)`: KEEPFILTERS + TREATAS, áp slicer quận cho cả hai vai trò.
+  - `Days with Trips`: mẫu số, bỏ bộ lọc giờ và quận.
+  - `Avg Daily Pickups/Dropoffs/Net Pickups`, `PY`, `YoY %`.
+  - Giờ cao điểm đón/trả kèm tỷ trọng.
+  - Ngày đông nhất kèm trung bình.
+- **Phát hiện:**
+  - Cao điểm 18h ở cả đón và trả. Thứ Năm đông nhất (127.686 lượt đón/ngày).
+  - Đêm cuối tuần lúc 1h đông gấp 5–7 lần ngày thường (thứ Hai–thứ Năm). Chủ nhật đạt đỉnh lúc 0h.
+  - Queens là nơi xuất phát gần như suốt 6h–24h (sân bay), ngày đông nhất là Chủ nhật.
+  - Brooklyn là nơi đến từ 9h sáng đến 4h sáng hôm sau.
+- **Kiểm tra:**
+  - Số liệu đối chiếu tính bằng SQL trên `data/bi/` (mart giờ nối `dimdate`): 731 ngày (366 + 365); trung bình 117.298,6 / 110.443,6 / 124.172,3 lượt đón mỗi ngày.
+  - Chưa chạy trong Power BI Desktop.
+
+### 20/11/2026 — Thiết kế dashboard trang 7: Trends & Comparisons (B2, B3, B4)
+- **Thiết kế** `docs/guides/powerbi_design.md` mục 11 (mới):
+  - Trang cố định so sánh 2025 với 2024: slicer Year bỏ đồng bộ trên trang, năm gắn bằng bộ lọc từng visual.
+  - 4 KPI card: callout là mức thay đổi (doanh thu, số chuyến, doanh thu mỗi chuyến so với 2024; tháng 6 so với tháng 5), reference là giá trị tuyệt đối.
+  - V1: đường doanh thu theo tháng của hai năm.
+  - V2: cột tăng trưởng cùng kỳ của doanh thu và số chuyến.
+  - V3: waterfall thay đổi doanh thu mỗi chuyến theo từng khoản.
+  - V4: thanh hai phía tháng 6 so với tháng 5 theo quận.
+  - Kèm tương tác, đánh đổi, số liệu đối chiếu.
+- **Truy vấn:**
+  - `powerbi/queries/RevenueComponent.pq` (mới): bảng tĩnh 8 khoản doanh thu cho trục waterfall, không có quan hệ.
+  - `powerbi/queries/DimMonth.pq`: thêm `monthshort` (Jan…Dec) để 12 nhãn trục nằm ngang.
+  - `docs/guides/powerbi.md` mục 2.1, 2.3 và dòng trang 7 ở mục 3 cập nhật theo.
+- **Measure** `powerbi/dax/measures.dax`: thêm 11 measure, tổng 119, không trùng tên.
+  - `Revenue per Day May`, `Revenue per Day June`, `Revenue per Day June vs May %`.
+  - `Congestion Surcharge`, `Airport Fee`, `CBD Congestion Fee`, `Other Surcharges`, `Unreconciled Amount`.
+  - `Component Amount`, `Component per Trip`, `Component per Trip Change`.
+- **Phát hiện chất lượng dữ liệu:** TotalAmount không bằng tổng các khoản. Năm 2024 lệch −11,7 triệu USD (−0,29 USD/chuyến), năm 2025 +0,5 triệu. Waterfall giữ cột "Unreconciled" để tổng khớp và trung thực.
+- **Phát hiện khác:**
+  - Doanh thu 2025 tăng 13,0%, số chuyến tăng 12,1%, doanh thu mỗi chuyến chỉ tăng 0,8% (+0,23 USD).
+  - Trong mức +0,23 USD mỗi chuyến: phí CBD +0,55, cước +0,26, tiền boa −0,35, phụ phí ùn tắc −0,28.
+  - Tháng 6/2025 thấp hơn tháng 5 là −4,4%, nhưng tính mỗi ngày chỉ −1,2% (tháng 6 ít hơn một ngày). Manhattan đóng góp −4,93 triệu USD.
+- **Kiểm tra:**
+  - Số liệu đối chiếu tính bằng SQL trên `data/bi/mart_trips_daily.parquet` và `mart_monthly_kpi.parquet`.
+  - Tổng các cột waterfall khớp thay đổi doanh thu mỗi chuyến (0,231).
+- **`.gitignore`:** đổi `powerbi/*.pbix` thành `powerbi/**/*.pbix`, để không commit `powerbi/dashboard/NYC_Taxi_Dashboard.pbix`. File này 125 MB, chứa dữ liệu và vượt giới hạn 100 MB của GitHub.
+  - Chưa chạy trong Power BI Desktop.
+
+### 20/11/2026 — Thiết kế dashboard trang 6: Routes & Map (A7, B5)
+- **Thiết kế** `docs/guides/powerbi_design.md` mục 10 (mới):
+  - 4 KPI card: tỷ trọng 10 tuyến đông nhất (kèm số tuyến), tỷ trọng chuyến khác quận, tỷ trọng chuyến đón ở sân bay (hai card này so cùng kỳ bằng pp), khu vực đón nhiều nhất.
+  - V1: Shape map tô theo tỷ lệ cân bằng đón/trả `(trả − đón)/(trả + đón)`, thang chia đôi cam/xanh cố định từ −1 đến +1. Không tô theo số chuyến vì số chuyến lệch rất mạnh (trung vị 18 nghìn, lớn nhất 3,9 triệu).
+  - V2, V3: hai bảng Top 10 tuyến, theo số chuyến và theo doanh thu, có data bar. Dùng bảng thay cho biểu đồ thanh vì tên tuyến dài.
+  - Kèm tương tác, đánh đổi, số liệu đối chiếu.
+- **Measure** `powerbi/dax/measures.dax`: thêm 11 measure, tổng 108, không trùng tên.
+  - `Route Avg Duration (min)`, `Route Trip Share`, `Route Count`, `Top 10 Routes Share`.
+  - `Cross-Borough Trip Share`, `Airport Pickup Share` và hai measure `* Change (pp)` (lùi `monthkey` 100 như trang 5).
+  - `Top Pickup Zone`, `Top Pickup Zone Share`.
+  - `Zone Net Flow Ratio`: trả BLANK khi khu vực dưới 1.000 lượt.
+- **Hướng dẫn** `docs/guides/powerbi.md` mục 3, trang 6: đổi `Route Avg Distance (mi)` thành `Route Avg Duration (min)`.
+- **Phát hiện chất lượng dữ liệu:** tuyến Upper East Side South → North có quãng đường trung bình khoảng 1,04 dặm mỗi tháng, riêng 03/2025 là 12,07 dặm vì một chuyến bất thường. Vì vậy `Route Avg Distance (mi)` không dùng được cho bảng tuyến; trang 6 dùng thời gian trung bình.
+- **Phát hiện khác:**
+  - 10 tuyến đông nhất chỉ chiếm 3,7% chuyến trên 56.336 tuyến. Các tuyến này là chặng ngắn trong Upper East Side.
+  - Tuyến nhiều doanh thu nhất là chặng sân bay: JFK → Outside of NYC 22,0 triệu USD, 129,51 USD/chuyến.
+  - 222 trên 248 khu vực có nhiều lượt trả hơn lượt đón. JFK (−0,63) và LaGuardia (−0,46) là điểm xuất phát rõ nhất.
+  - Khu vực đón nhiều nhất năm 2024 là JFK, năm 2025 là Upper East Side South.
+- **Kiểm tra:**
+  - Số liệu đối chiếu tính bằng SQL trên `data/bi/mart_routes_monthly.parquet`; tổng 85.745.246 chuyến khớp Fact.
+  - Chưa chạy trong Power BI Desktop.
+
+### 20/11/2026 — Thiết kế dashboard trang 5: Trip Profile (A5, B1)
+- **Thiết kế** `docs/guides/powerbi_design.md` mục 9 (mới):
+  - 4 KPI card: tỷ trọng chuyến dưới 2 dặm, tỷ trọng chuyến 1 khách (trên số chuyến có ghi nhận), vận tốc, thời gian chuyến. So sánh dùng pp hoặc %, màu trung tính.
+  - V1: highlight table nhóm khách × nhóm cự ly.
+  - V2: cột tỷ lệ boa theo cự ly, trục từ 0.
+  - V3: bảng theo mã giá có data bar ở nhiều cột, thay cho biểu đồ kết hợp hai trục Y của phác thảo ban đầu.
+  - Kèm tương tác, đánh đổi, số liệu đối chiếu.
+- **Truy vấn** `powerbi/queries/DimPassengerGroup.pq`: thêm `passengerorder` (No passenger count, Unknown xếp cuối).
+  - `docs/guides/powerbi.md` mục 2.1 và 2.3: thêm cột này và hai Sort by column (`passengergroupname` theo `passengerorder`, `distancegroupname` theo `distancegroupsk`).
+- **Measure** `powerbi/dax/measures.dax`: thêm 7 measure, tổng 97, không trùng tên.
+  - `Profile Avg Duration (min)`, `Short Trip Share`, `Solo Ride Share`, 2 measure `* Change (pp)`, `Profile Avg Speed YoY %`, `Profile Avg Duration YoY %`.
+  - `TripProfile` chỉ nối `DimMonth`, nên so sánh cùng kỳ lùi `monthkey` đi 100 rồi áp bằng `TREATAS` sau `REMOVEFILTERS ( DimMonth )`, thay cho `SAMEPERIODLASTYEAR`.
+- **Phát hiện chất lượng dữ liệu:**
+  - Mã giá Unknown, nhóm "Over 5 miles": quãng đường trung bình 63,7 dặm (Standard rate 9,4). Quãng đường trung bình toàn kỳ (5,84; năm 2025 là 6,59) bị kéo lệch, nên trang 5 không dùng chỉ số này.
+  - 1,26 triệu chuyến thẻ có mã giá 99 gần như không ghi tiền boa (tổng 315 USD).
+- **Phát hiện khác:**
+  - Chuyến ngắn boa cao hơn: 25,8% so với 19,2% ở chuyến trên 5 dặm.
+  - Chuyến JFK đi nhanh gấp đôi (22,3 so với 10,2 mph) nhưng tỷ lệ boa thấp hơn (20,0% so với 23,7%).
+- **Kiểm tra:**
+  - Số liệu đối chiếu tính bằng SQL trên `data/bi/mart_trip_profile.parquet`: vận tốc 10,878 → 11,001 mph (+1,13%), thời gian 17,52 → 17,54 phút.
+  - Chưa chạy trong Power BI Desktop.
 
 ### 18/11/2026 — DuckDB bước 5: Data warehouse (OLAP mart, SCD2, runner QA)
 - **OLAP mart** (`dbt/models/olap_marts/`, schema `olap`, materialized `table`), tổ chức theo grain dùng chung (người dùng chọn thay cho một mart mỗi câu):
@@ -131,6 +309,7 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
   - **Dữ liệu thật:** `dbt build --full-refresh` toàn bộ project (Fact dựng lại vì SK Location đổi): 98/98 PASS trong 3 phút 12 giây (Fact 116 s). Fact 85.745.246 dòng, 0 khóa Location -1, SK Location 101..26501; `dimlocation` 266 dòng, tất cả `iscurrent`.
   - **Runner QA:** `.\tasks.ps1 qa full` 53 PASS, 0 FAIL, 1 NOT APPLICABLE, ~32 s; `qa all` (không quét lớn) 50 PASS, 4 NOT RUN. Kiểm thử âm tính trên bản sao 2 tháng có 10 dòng nạp trùng và 1 dòng bị xóa: `RAW-DUP-01` FAIL đúng 2 file, `RAW-REC-03` FAIL, mã thoát 1 (bản sao đã xóa).
   - `dbt parse` OK; `python -m compileall tests` OK.
+- Commit `e28b22a` trên nhánh `feat/duckdb-warehouse`, push lên `origin`: Auto PR mở PR #6 vào `main` của `thinhdao-77/NYC_TAXI_DataPipeline`; CI **đạt** trên GitHub Actions.
 - Chưa làm: Power BI (bước 6); pipeline Mage end-to-end (ingest → `dbt build`).
 
 ### 18/11/2026 — DuckDB bước 4: ETL/ELT (Dimension + Fact)
@@ -270,7 +449,7 @@ Quyết định ngày 16/11/2026: thay PostgreSQL bằng DuckDB làm kho dữ li
 | 3. Staging | `profiles.yml` sang dbt-duckdb (bỏ `dbt-postgres`); `sources.yml` trỏ `raw`; model staging (schema `stage`): đặt tên, cột dẫn xuất, cờ dữ liệu lỗi; DDS đọc staging bằng `ref()`; `sql/profiling` chạy trên DuckDB | **Xong, đã chạy trên 24 tháng** |
 | 4. ETL/ELT | Sửa hàm riêng PostgreSQL trong `dim_date`/`dim_time` (`to_char` → `strftime`, `generate_series` → `range`); Fact lọc bằng `is_valid_for_fact`; Fact `delete+insert` theo `sourcefilename` (4a); test `assert_fact_matches_staging` | **Xong, đã chạy trên 24 tháng** |
 | 5. Data warehouse | 5 OLAP mart (schema `olap`) + test đối chiếu Fact; runner QA viết lại cho `duckdb`; SCD Type 2 cho `dim_location` bằng `dbt snapshot` (5a) | **Xong, đã chạy trên 24 tháng** |
-| 6. Power BI | Kết nối DuckDB (ODBC, chế độ Import) hoặc đọc mart xuất ra Parquet | Chưa làm |
+| 6. Power BI | Xuất mart ra Parquet (người dùng chọn thay cho ODBC); file M, DAX, bản đồ và hướng dẫn (người dùng chọn thay cho dựng sẵn `.pbip`) | **Phần chuẩn bị xong**; dựng `.pbix` do người dùng làm |
 
 ### Cơ chế nạp và lịch sử dữ liệu (quyết định 17/11/2026)
 

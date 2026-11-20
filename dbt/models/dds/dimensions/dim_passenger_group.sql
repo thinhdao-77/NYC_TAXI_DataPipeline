@@ -1,4 +1,4 @@
--- DimPassengerGroup: nhóm tĩnh theo số hành khách.
+-- DimPassengerGroup: nhóm tĩnh theo số hành khách. Nhãn tiếng Anh (hiển thị trên dashboard Power BI).
 -- NONE: passenger_count = 0 hoặc NULL (Fact join bằng coalesce(passenger_count, 0)); chủ yếu chuyến Flex Fare.
 {{ config(alias='dimpassengergroup') }}
 
@@ -10,8 +10,8 @@ select
     g.maxpassengers
 from (values
     (-1, 'UNK',    'Unknown',                 -1,   -1),
-    ( 0, 'NONE',   'Không ghi nhận hành khách', 0,    0),
-    ( 1, 'SINGLE', '1 hành khách',              1,    1),
-    ( 2, 'SMALL',  'Nhóm 2-4 người',            2,    4),
-    ( 3, 'LARGE',  'Nhóm từ 5 người trở lên',   5, 9999)
+    ( 0, 'NONE',   'No passenger count',        0,    0),
+    ( 1, 'SINGLE', '1 passenger',               1,    1),
+    ( 2, 'SMALL',  '2-4 passengers',            2,    4),
+    ( 3, 'LARGE',  '5+ passengers',             5, 9999)
 ) as g(passengergroupsk, passengergroupcode, passengergroupname, minpassengers, maxpassengers)

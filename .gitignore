@@ -7,6 +7,10 @@ data/raw/*
 data/warehouse/*
 !data/warehouse/.gitkeep
 
+# Dữ liệu xuất cho Power BI (tasks.ps1 export-bi) và file Power BI có dữ liệu
+data/bi/
+powerbi/**/*.pbix
+
 # Log kiểm thử sinh tự động (giữ một lần chạy mẫu đã được commit)
 docs/02_test_plans_and_logs/runs/*
 !docs/02_test_plans_and_logs/runs/run_20261026T034420Z.*
