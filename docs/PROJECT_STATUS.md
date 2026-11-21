@@ -30,7 +30,7 @@ Parquet nguồn → Mage ingestion → DuckDB (`raw`) → dbt staging → Dimens
 | Data modeling docs | Một phần | `docs/01_data_modeling/modeling.pdf` (Giai đoạn 1 của nhóm: business event, 8 Dimension, Fact, measures, truy vấn kiểm chứng Star Schema); sơ đồ Star Schema chỉ có qua link Google Drive trong PDF |
 | OLAP mart | **Hoàn thành, chạy trên DuckDB** | 5 mart trong schema `olap` (`mart_trips_daily`, `mart_hourly_activity`, `mart_routes_monthly`, `mart_trip_profile`, `mart_monthly_kpi`) phục vụ A1–A8, B1–B5 của modeling.pdf; tổng khớp Fact. Hướng dẫn: [guides/olap.md](guides/olap.md) |
 | Pipeline ELT end-to-end | **Chưa có** | Cần pipeline Mage: ingest → `dbt build` |
-| Power BI | **Đã dựng 7 trang, chờ đối chiếu số liệu** | `.\tasks.ps1 export-bi` xuất 5 mart + 7 Dimension ra `data/bi/*.parquet`; `powerbi/queries/*.pq` (Power Query), `powerbi/dax/measures.dax` (119 measure), `powerbi/map_shapes/` (TopoJSON 263 zone + tâm khu vực); hướng dẫn dựng model và 7 trang: [guides/powerbi.md](guides/powerbi.md). Template `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (không chứa dữ liệu); `.pbix` có dữ liệu chỉ giữ ở máy |
+| Power BI | **Đã dựng 7 trang, số liệu khớp; còn sửa hiển thị** | `.\tasks.ps1 export-bi` xuất 5 mart + 7 Dimension ra `data/bi/*.parquet`; `powerbi/queries/*.pq` (Power Query), `powerbi/dax/measures.dax` (119 measure), `powerbi/map_shapes/` (TopoJSON 263 zone + tâm khu vực); hướng dẫn dựng model và 7 trang: [guides/powerbi.md](guides/powerbi.md). Template `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (không chứa dữ liệu); `.pbix` có dữ liệu chỉ giữ ở máy |
 
 ## 3. Chi tiết phần đã làm
 
@@ -77,7 +77,7 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 10. `is_total_mismatch` dựa trên quy luật quan sát từ dữ liệu (`extra` đã gồm phụ phí ở nhiều dòng), không phải định nghĩa chính thức của TLC; còn 384.360 dòng lệch thật (0,43%) chưa phân tích nguyên nhân.
 9. DuckDB không tự thu hồi chỗ của dòng đã xóa khi nạp lại một file; nạp lại nhiều lần làm file phình. Thu gọn bằng `COPY FROM DATABASE` sang file mới khi cần.
 7. `data/reference/taxi_zones.zip` (nhị phân) vẫn nằm trong git; nay là nguồn của `powerbi/map_shapes/` (`tasks.ps1 build-map`) nên giữ lại.
-13. Báo cáo Power BI đã dựng đủ 7 trang (template `.pbit`), nhưng số liệu trên dashboard chưa được đối chiếu với mục 5 của `guides/powerbi.md`. Shape map là tính năng preview của Power BI.
+13. Báo cáo Power BI đã dựng đủ 7 trang (template `.pbit`); số liệu đã đối chiếu và khớp (21/11/2026); phần lớn lỗi hiển thị đã sửa. Còn lại: waterfall trang 7 vẫn tắt trục X (không có tên khoản dưới cột). Heatmap trang 4 (đủ 7 ngày) chưa kiểm lại bằng ảnh chụp. Shape map là tính năng preview của Power BI.
 
 ## 5. Cấu trúc thư mục hiện tại
 
@@ -104,7 +104,7 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 
 ## 6. Việc nên làm tiếp
 
-1. Đối chiếu số liệu dashboard với mục 5 của [guides/powerbi.md](guides/powerbi.md); chụp ảnh dashboard (`powerbi/screenshots/`) và cập nhật README.
+1. ~~Đối chiếu số liệu dashboard~~ (khớp, 21/11/2026); bật trục X của waterfall trang 7 (lỗi đã biết số 13); chụp ảnh dashboard (`powerbi/screenshots/`) và cập nhật README.
 2. Quyết định giữ hay bỏ `sql/warehouse/`; thống nhất `TripSK` cho Fact.
 3. Chuyển nội dung `modeling.pdf` thành markdown + ERD trong repo (sơ đồ hiện chỉ có qua link Google Drive) và bổ sung data dictionary.
 4. ~~Xây OLAP mart~~: xong ở bước 5.
@@ -217,6 +217,32 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 - **Kiểm tra:**
   - Số liệu đối chiếu tính bằng SQL trên `data/bi/` (mart giờ nối `dimdate`): 731 ngày (366 + 365); trung bình 117.298,6 / 110.443,6 / 124.172,3 lượt đón mỗi ngày.
   - Chưa chạy trong Power BI Desktop.
+
+### 21/11/2026 — Sửa hiển thị dashboard Power BI
+- **Người dùng** sửa trong Power BI Desktop và xuất lại `powerbi/dashboard/NYC_Taxi_Dashboard.pbit`.
+- **Kiểm tra** bằng cách đọc JSON của báo cáo trong file `.pbit`:
+  - Đã sửa:
+    - 6 biểu đồ đường ở trang 1, 3, 4, 7 chuyển sang `lineChartType = linear` (bỏ làm mượt);
+    - trang 7: V1 và V2 sắp theo `DimMonth[monthshort]` tăng dần;
+    - trang 4: small multiples bật tiêu đề panel (`subheader show = true`).
+  - **Chưa sửa:** waterfall trang 7 vẫn để `categoryAxis show = false`.
+  - Không kiểm được qua JSON, cần ảnh chụp: heatmap trang 4 có hiện đủ 7 ngày không, tên cột, nhãn KPI.
+  - File không có phần `DataModel` (không chứa dữ liệu). Vẫn còn `UnappliedChanges`.
+
+### 21/11/2026 — Đối chiếu số liệu dashboard Power BI
+- **Người dùng** gửi ảnh chụp 7 trang (không lọc). Tôi so từng con số với SQL trên `data/bi/*.parquet`; **mọi số khớp**:
+  - Trang 1: 85.7M chuyến, 94.9M hành khách, $2.48bn, $28.87/chuyến; Manhattan $1,821.5M (73.58%).
+  - Trang 2: JFK 12.7%, VeriFone 78.6%, giờ 17 chiếm 7.1%; heatmap Bronx 7h 9.7%, Brooklyn 8h 6.4%, Manhattan 18h 7.5%, Queens 16h 7.8%.
+  - Trang 3:
+    - tỷ trọng: thẻ 71.2%, tiền mặt 11.4%, Unknown 15.8%;
+    - tỷ lệ boa 21.9% (SQL 21.88%);
+    - doanh thu/chuyến: thẻ $30.10, Unknown $26.08, tiền mặt $25.11;
+    - tiền boa/chuyến: thẻ $4.35, tất cả $3.18.
+  - Trang 4: giờ cao điểm 18h (7.1% / 7.4%), thứ Năm 128K/ngày, trung bình 117K/ngày.
+  - Trang 5: 54.6%, 79.0%, 10.9 mph, 17.5 phút; ma trận và tỷ lệ boa 25.8/21.7/19.2% khớp.
+  - Trang 6: 3.7% (56K tuyến), 14.1%, 7.4%, Upper East Side South 4.6%; hai bảng Top 10 khớp.
+  - Trang 7: ▲13.0%, ▲12.1%, ▲0.8%, ▼4.4% (mỗi ngày ▼1.2%); waterfall +0.26 / −0.35 / −0.05 / −0.28 / −0.02 / +0.55 / −0.17 / +0.30 = +0.23.
+- **Lỗi hiển thị phát hiện** (chưa sửa, do người dùng sửa trong Power BI Desktop): xem lỗi đã biết số 13.
 
 ### 21/11/2026 — Bỏ tài liệu thiết kế dashboard
 - **Theo yêu cầu người dùng**, xóa `docs/guides/powerbi_design.md`. Bản dựng cuối nằm trong template `.pbit`.
