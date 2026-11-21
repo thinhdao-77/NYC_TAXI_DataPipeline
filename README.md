@@ -17,7 +17,7 @@ Dự án xây dựng quy trình xử lý và phân tích dữ liệu **NYC Yello
 | OLAP | Chưa có mart trong `dbt/models/olap_marts/` |
 | End-to-end ELT | Chưa có pipeline Mage gọi ingestion → dbt |
 | CI | GitHub Actions: kiểm tra cú pháp Python, `docker compose config`, `dbt parse` |
-| Power BI | Có thư mục khung; chưa có báo cáo `.pbip` hoặc dashboard hoàn chỉnh |
+| Power BI | Dashboard 7 trang, template `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (đọc Parquet từ `.\tasks.ps1 export-bi`); hướng dẫn: [docs/guides/powerbi.md](docs/guides/powerbi.md) |
 
 > README này mô tả trạng thái của repo hiện tại. Các mô hình Dimension, Fact, truy vấn OLAP và dashboard là mục tiêu phát triển tiếp, không phải chức năng đã triển khai đầy đủ.
 

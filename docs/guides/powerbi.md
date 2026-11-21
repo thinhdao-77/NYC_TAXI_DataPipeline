@@ -84,7 +84,7 @@ Tất cả là một-nhiều (1 → *), lọc một chiều từ Dimension sang 
 
 ## 3. Các trang báo cáo
 
-> Thiết kế chi tiết (nguyên tắc trực quan hóa, mã màu, cỡ chữ, tọa độ từng visual, đánh đổi, số liệu đối chiếu) cho từng trang: [powerbi_design.md](powerbi_design.md). Bảng dưới đây là phác thảo ban đầu; khi hai tài liệu khác nhau, theo `powerbi_design.md`.
+> Bảng dưới đây là phác thảo ban đầu. Bản dựng cuối nằm trong template `powerbi/dashboard/NYC_Taxi_Dashboard.pbit`; khi hai nơi khác nhau, theo template.
 
 Slicer chung đặt ở mọi trang (Sync slicers): `DimMonth[year]`, `DimMonth[yearmonth]` (hoặc `month`).
 
@@ -96,7 +96,7 @@ Slicer chung đặt ở mọi trang (Sync slicers): `DimMonth[year]`, `DimMonth[
 | **4. Thời điểm đón/trả** | A4 | Biểu đồ cột cụm `Pickup Trips`, `Dropoff Trips` theo `HourlyActivity[hour]`; ma trận nhiệt (Matrix + conditional formatting): hàng `DimDate[dayname]` (cột `HourlyActivity[dayname]` đã ẩn ở 2.3; `datesk` của mart giờ là ngày đón hoặc ngày trả theo vai trò nên vẫn đúng), cột `HourlyActivity[hour]`, giá trị `Pickup Trips` |
 | **5. Hồ sơ chuyến đi** | A5, B1 | Matrix: hàng `DimPassengerGroup[passengergroupname]`, cột `DimDistanceGroup[distancegroupname]`, giá trị `Profile Trips`, slicer `DimRateCode[ratecodename]` (A5); biểu đồ kết hợp theo `DimRateCode[ratecodename]`: cột `Profile Avg Tip Rate`, đường `Profile Avg Speed (mph)` (B1) |
 | **6. Tuyến & bản đồ** | A7, B5 | Bảng `RoutesMonthly[route]`, `Route Trips`, `Route Avg Duration (min)` (không dùng `Route Avg Distance (mi)`: có quãng đường bất thường), `Route Revenue`, lọc visual Top N = 10 theo `Route Trips` (hoặc `Route Rank` ≤ 10); Shape map lượt đón/trả theo khu vực (mục 4) |
-| **7. Xu hướng & so sánh kỳ** | B2, B3, B4 | Biểu đồ đường `KPI Revenue` và `KPI Trips` theo `DimMonth[yearmonth]`; cột `KPI Revenue YoY %` (B4); thẻ `Revenue May`, `Revenue June`, `Revenue June vs May %` với slicer năm, kèm bảng theo `DimVendor`/`DimRateCode`/`DimLocation[borough]` dùng các measure đó (B2); biểu đồ đường `Fare per Trip`, `Surcharges per Trip`, `Tip per Trip`, `Avg Distance per Trip (mi)` theo tháng (B3: doanh thu/chuyến tăng do thành phần nào). Bản thiết kế cuối ở `powerbi_design.md` mục 11: dùng measure của `TripsDaily` (slicer Borough có tác dụng), waterfall theo khoản trên mỗi chuyến thay cho các đường theo tháng |
+| **7. Xu hướng & so sánh kỳ** | B2, B3, B4 | Biểu đồ đường `KPI Revenue` và `KPI Trips` theo `DimMonth[yearmonth]`; cột `KPI Revenue YoY %` (B4); thẻ `Revenue May`, `Revenue June`, `Revenue June vs May %` với slicer năm, kèm bảng theo `DimVendor`/`DimRateCode`/`DimLocation[borough]` dùng các measure đó (B2); biểu đồ đường `Fare per Trip`, `Surcharges per Trip`, `Tip per Trip`, `Avg Distance per Trip (mi)` theo tháng (B3: doanh thu/chuyến tăng do thành phần nào). Bản dựng cuối dùng measure của `TripsDaily` (slicer Borough có tác dụng) và waterfall `Component per Trip Change` theo bảng `RevenueComponent` thay cho các đường theo tháng |
 
 ## 4. Bản đồ Taxi Zone (B5)
 
@@ -134,5 +134,5 @@ Lệch so với bảng này thường do: thiếu quan hệ hoặc quan hệ sai
 ## 6. Lưu và cập nhật
 
 - **Refresh** sau khi pipeline chạy lại: `.\tasks.ps1 export-bi` rồi Home > Refresh trong Power BI.
-- **Lưu file:** `powerbi/nyc_taxi.pbix` chứa cả dữ liệu đã nạp (dự kiến vài chục MB), không nên commit. Để đưa vào git, dùng **File > Export > Power BI template** (`powerbi/nyc_taxi.pbit`: chỉ model, truy vấn, measure, báo cáo, không có dữ liệu; khi mở sẽ hỏi `RepoFolder`).
+- **Lưu file:** `powerbi/dashboard/NYC_Taxi_Dashboard.pbix` chứa cả dữ liệu đã nạp (khoảng 125 MB, vượt giới hạn 100 MB của GitHub) và bị `.gitignore` bỏ qua. File đưa vào git là template **File > Export > Power BI template**: `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (khoảng 330 KB: chỉ model, truy vấn, measure, báo cáo, không có dữ liệu). Mở `.pbit` thì Power BI hỏi `RepoFolder` (thư mục gốc repo), rồi nạp lại từ `data/bi/*.parquet`, nên cần chạy `.\tasks.ps1 export-bi` trước.
 - Ảnh chụp dashboard cho README/CV: lưu vào `powerbi/screenshots/`.
