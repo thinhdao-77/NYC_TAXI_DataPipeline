@@ -23,11 +23,10 @@ Parquet nguồn → Mage ingestion → DuckDB (`raw`) → dbt staging → Dimens
 | Fact `facttaxitrip` | **Hoàn thành, chạy trên DuckDB (24 tháng)** | `dbt/models/dds/facts/fact_taxi_trips.sql`: lọc `is_valid_for_fact`, incremental `delete+insert` theo `sourcefilename`; 85.745.246 dòng, build đầy đủ 94 s, 18 test PASS. Hướng dẫn: [guides/fact.md](guides/fact.md#0-chạy-trên-duckdb-dbt) |
 | SQL thủ công DDS | Lưu để tham khảo | `sql/warehouse/01..05` (Dimension idempotent + Fact + verify) |
 | Runner QA (DuckDB) | **Hoàn thành, đã chạy** | `tests/run_quality_tests.py` viết lại cho DuckDB (read_only), kiểm tra xuyên tầng raw → stage → dds → olap; `.\tasks.ps1 qa full`: 53 PASS, 0 FAIL, ~32 s. Hướng dẫn: [guides/testing.md](guides/testing.md) |
-| Test plan + log | Một phần | `docs/02_test_plans_and_logs/`: test plan viết cho giai đoạn PostgreSQL; bản chạy mẫu `run_20261118T115030Z` (DuckDB) và `run_20261026T034420Z` (PostgreSQL cũ) |
+| Test plan + log | Một phần | `docs/test_plans_and_logs/`: test plan viết cho giai đoạn PostgreSQL; bản chạy mẫu `run_20261118T115030Z` (DuckDB) và `run_20261026T034420Z` (PostgreSQL cũ) |
 | CI / tự động hóa GitHub | **Hoàn thành, đã chạy thật trên GitHub** | `ci.yml` chạy khi push mọi nhánh; `auto-pr.yml` tự mở PR vào `main`; repo tự xóa nhánh sau khi merge |
 | Lệnh tiện ích | Hoàn thành | `tasks.ps1` (up/down/shell/sql/ingest-zones/ingest/profile/dbt-*/qa/export-bi/build-map/prune-branches) |
-| Báo cáo thành phần | Một phần | `docs/03_reports/sections/` (Vân, Khoa) |
-| Data modeling docs | Một phần | `docs/01_data_modeling/modeling.pdf` (Giai đoạn 1 của nhóm: business event, 8 Dimension, Fact, measures, truy vấn kiểm chứng Star Schema); sơ đồ Star Schema chỉ có qua link Google Drive trong PDF |
+| Data modeling docs | Một phần | `docs/data_modeling/modeling.pdf` (giai đoạn 1: business event, 8 Dimension, Fact, measures, truy vấn kiểm chứng Star Schema); sơ đồ Star Schema chỉ có qua link Google Drive trong PDF |
 | OLAP mart | **Hoàn thành, chạy trên DuckDB** | 5 mart trong schema `olap` (`mart_trips_daily`, `mart_hourly_activity`, `mart_routes_monthly`, `mart_trip_profile`, `mart_monthly_kpi`) phục vụ A1–A8, B1–B5 của modeling.pdf; tổng khớp Fact. Hướng dẫn: [guides/olap.md](guides/olap.md) |
 | Pipeline ELT end-to-end | **Chưa có** | Cần pipeline Mage: ingest → `dbt build` |
 | Power BI | **Đã dựng 7 trang, số liệu khớp; còn sửa hiển thị** | `.\tasks.ps1 export-bi` xuất 5 mart + 7 Dimension ra `data/bi/*.parquet`; `powerbi/queries/*.pq` (Power Query), `powerbi/dax/measures.dax` (119 measure), `powerbi/map_shapes/` (TopoJSON 263 zone + tâm khu vực); hướng dẫn dựng model và 7 trang: [guides/powerbi.md](guides/powerbi.md). Template `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (không chứa dữ liệu); `.pbix` có dữ liệu chỉ giữ ở máy |
@@ -95,10 +94,9 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 ├── powerbi/                  # scripts/ (export_bi, build_map_shapes), queries/ (M), dax/measures.dax, map_shapes/
 ├── docs/
 │   ├── PROJECT_STATUS.md     # file này
-│   ├── guides/               # ingestion, staging, dimension, dimension_handover, fact, olap, testing, powerbi
-│   ├── 01_data_modeling/
-│   ├── 02_test_plans_and_logs/
-│   └── 03_reports/
+│   ├── guides/               # ingestion, staging, dimension, fact, olap, testing, powerbi
+│   ├── data_modeling/
+│   └── test_plans_and_logs/
 ├── docker-compose.yml, Dockerfile, requirements.txt, requirements-dbt.txt, tasks.ps1, .env.example, README.md, CLAUDE.md
 ```
 
@@ -217,6 +215,45 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 - **Kiểm tra:**
   - Số liệu đối chiếu tính bằng SQL trên `data/bi/` (mart giờ nối `dimdate`): 731 ngày (366 + 365); trung bình 117.298,6 / 110.443,6 / 124.172,3 lượt đón mỗi ngày.
   - Chưa chạy trong Power BI Desktop.
+
+### 21/11/2026 — Dọn tài liệu theo hướng repo cá nhân
+- **Yêu cầu của người dùng:** repo do một người phát triển, không giữ tên hay phân công của thành viên nhóm cũ.
+- **Xóa:**
+  - `docs/03_reports/`:
+    - hai báo cáo QA theo từng thành viên (Source → Staging, Staging → Dimension), viết cho bản PostgreSQL và đã được thay bằng runner QA trên DuckDB (`guides/testing.md`, `test_plans_and_logs/runs/`);
+    - các thư mục trống `milestone_01_11`, `final_01_12`.
+  - `docs/guides/dimension_handover.md`: tài liệu bàn giao giữa các thành viên, bản PostgreSQL. Cách chạy Dimension hiện tại ở `guides/dimension.md`.
+- **Sửa:**
+  - `docs/guides/fact.md`:
+    - bỏ người phụ trách, nguồn "do ai nạp/tạo", đối tượng bàn giao và tài liệu phân công;
+    - mục 5 đổi thành "Tiêu chí nghiệm thu và kết quả kiểm thử".
+  - `README.md`:
+    - "Quy trình làm việc với Git" viết lại cho repo cá nhân (clone `thinhdao-77/NYC_TAXI_DataPipeline`, nhánh từ `main`, PR tự mở, dọn nhánh);
+    - bỏ bảng "Phân công", giữ đoạn lộ trình;
+    - bỏ `03_reports/` khỏi cây thư mục.
+  - `docs/PROJECT_STATUS.md`:
+    - bỏ dòng "Báo cáo thành phần";
+    - sửa cây thư mục;
+    - mục nhật ký 16/11 không còn URL/tên tài khoản của repo nhóm.
+- **Giữ nguyên:**
+  - `CLAUDE.md`: vẫn nêu tên repo nhóm trong quy tắc "không push/không tạo PR vào repo nhóm", vì quy tắc cần tên đó để có tác dụng.
+  - `modeling.pdf`: đã đọc, không có tên thành viên.
+- **Kiểm tra:** `git grep` tên các thành viên cũ, nhãn "Người 2/3/4" và tài khoản GitHub của repo nhóm: chỉ còn trong `CLAUDE.md`.
+- **Người dùng đổi tên thư mục:**
+  - `docs/01_data_modeling` → `docs/data_modeling`;
+  - `docs/02_test_plans_and_logs` → `docs/test_plans_and_logs`.
+- **Người dùng sửa** `docs/guides/powerbi.md`: bỏ dòng về `powerbi/screenshots/`.
+- **Cập nhật đường dẫn mới** ở:
+  - `.gitignore` (log QA tự sinh);
+  - `tests/run_quality_tests.py` (thư mục ghi log `RESULTS`);
+  - `CLAUDE.md`, `README.md`;
+  - `docs/guides/fact.md`, `olap.md`, `testing.md` (gồm liên kết tới `test-plan.md`);
+  - bảng trạng thái và cây thư mục ở file này.
+  - Các mục nhật ký cũ giữ đường dẫn cũ làm lịch sử.
+- **Kiểm tra:**
+  - `git grep` đường dẫn cũ chỉ còn trong nhật ký cũ;
+  - `py_compile tests/run_quality_tests.py` OK;
+  - các file log mẫu vẫn được `.gitignore` cho phép commit.
 
 ### 21/11/2026 — Sửa hiển thị dashboard Power BI
 - **Người dùng** sửa trong Power BI Desktop và xuất lại `powerbi/dashboard/NYC_Taxi_Dashboard.pbit`.
@@ -457,11 +494,11 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 - Fork cũ đổi tên thành `thinhdao-77/NYC_TAXI_DataPipeline-fork` (chưa xóa, còn nhánh `revert/pr-7` của PR #8).
 - Tạo repo độc lập `thinhdao-77/NYC_TAXI_DataPipeline` (public, `fork: false`), đẩy `main` (`36e24d3`) và `refactor/project-structure` (`32b467e`). Không còn tạo được PR vào repo nhóm.
 - Local: `origin` trỏ repo mới; xóa remote `upstream` và nhánh local `revert/pr-7`; `gh repo set-default` trỏ repo mới.
-- Còn lại: mục "Quy trình làm việc với Git" và lệnh clone trong README vẫn mô tả quy trình/URL của repo nhóm, sẽ viết lại khi cập nhật README theo DuckDB.
+- Mục "Quy trình làm việc với Git" và lệnh clone trong README đã viết lại cho repo cá nhân ngày 21/11/2026.
 
 ### 16/11/2026 — Sự cố: PR merge nhầm vào repo gốc
-- PR #7 (`refactor/project-structure`) được tạo và merge nhầm vào `main` của repo gốc `nguyenanhtuan2702/NYC_TAXI` (merge commit `39a2f34`), kéo theo cả các commit `feat/fact-thinh`.
-- Đã mở PR revert: <https://github.com/nguyenanhtuan2702/NYC_TAXI/pull/8> (nhánh `revert/pr-7` trên fork, commit `d475177`); sau khi merge, `main` gốc giống hệt `36e24d3`. Cần nhóm duyệt và merge.
+- PR #7 (`refactor/project-structure`) được tạo và merge nhầm vào `main` của repo nhóm gốc (merge commit `39a2f34`), kéo theo cả các commit của nhánh Fact.
+- Đã mở PR revert #8 trên repo nhóm gốc (nhánh `revert/pr-7` trên fork, commit `d475177`); sau khi merge, `main` gốc giống hệt `36e24d3`. Cần nhóm duyệt và merge.
 - Hệ quả cần nhớ: khi nhóm merge `develop` → `main`, code Fact sẽ không tự quay lại; phải revert commit revert trước (đã ghi trong mô tả PR #8).
 - Phòng ngừa: `gh repo set-default` trỏ về fork; khi tạo PR trên web, kiểm tra ô *base repository* là `thinhdao-77/NYC_TAXI_DataPipeline` (GitHub mặc định chọn repo gốc).
 

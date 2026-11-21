@@ -15,7 +15,7 @@ Các suite:
 Thêm --include-large-scans để chạy các kiểm tra quét toàn bộ staging/Fact (vài chục giây).
 
 Runner KHÔNG chạy ETL, DDL hay DML: database mở bằng duckdb.connect(read_only=True),
-mọi lệnh ghi sẽ bị DuckDB từ chối. Kết quả lưu ở docs/02_test_plans_and_logs/runs/.
+mọi lệnh ghi sẽ bị DuckDB từ chối. Kết quả lưu ở docs/test_plans_and_logs/runs/.
 Mã thoát: 0 = không có FAIL/BLOCKED, 1 = có FAIL, 2 = có BLOCKED.
 """
 
@@ -32,7 +32,7 @@ from shutil import which
 from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
-RESULTS = ROOT / "docs" / "02_test_plans_and_logs" / "runs"
+RESULTS = ROOT / "docs" / "test_plans_and_logs" / "runs"
 DEFAULT_DB = ROOT / "data" / "warehouse" / "nyc_taxi.duckdb"
 STATUSES = ["PASS", "FAIL", "BLOCKED", "NOT RUN", "NOT APPLICABLE"]
 

@@ -135,4 +135,3 @@ Lệch so với bảng này thường do: thiếu quan hệ hoặc quan hệ sai
 
 - **Refresh** sau khi pipeline chạy lại: `.\tasks.ps1 export-bi` rồi Home > Refresh trong Power BI.
 - **Lưu file:** `powerbi/dashboard/NYC_Taxi_Dashboard.pbix` chứa cả dữ liệu đã nạp (khoảng 125 MB, vượt giới hạn 100 MB của GitHub) và bị `.gitignore` bỏ qua. File đưa vào git là template **File > Export > Power BI template**: `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (khoảng 330 KB: chỉ model, truy vấn, measure, báo cáo, không có dữ liệu). Mở `.pbit` thì Power BI hỏi `RepoFolder` (thư mục gốc repo), rồi nạp lại từ `data/bi/*.parquet`, nên cần chạy `.\tasks.ps1 export-bi` trước.
-- Ảnh chụp dashboard cho README/CV: lưu vào `powerbi/screenshots/`.

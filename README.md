@@ -82,9 +82,8 @@ NYC_TAXI_DataPipeline/
 ├── docs/
 │   ├── PROJECT_STATUS.md            # Tình trạng dự án, cập nhật theo mỗi thay đổi
 │   ├── guides/                      # staging, dimension, fact, testing
-│   ├── 01_data_modeling/
-│   ├── 02_test_plans_and_logs/      # test plan + một lần chạy mẫu (log mới không commit)
-│   └── 03_reports/
+│   ├── data_modeling/
+│   └── test_plans_and_logs/      # test plan + một lần chạy mẫu (log mới không commit)
 ├── mage/                            # Ingestion / orchestration
 │   ├── data_exporters/
 │   ├── data_loaders/
@@ -217,14 +216,14 @@ Staging giữ dữ liệu nguồn và các cột kiểm toán; các bước làm
 
 ## Kiểm thử ETL Stage và Dimension
 
-Runner QA chỉ đọc nằm trong `tests/run_quality_tests.py`; hướng dẫn và Test Plan ở `docs/guides/testing.md` và `docs/02_test_plans_and_logs/test-plan.md`.
+Runner QA chỉ đọc nằm trong `tests/run_quality_tests.py`; hướng dẫn và Test Plan ở `docs/guides/testing.md` và `docs/test_plans_and_logs/test-plan.md`.
 
 ```powershell
 python tests\run_quality_tests.py --suite smoke
 python tests\run_quality_tests.py --suite all
 ```
 
-Các kết quả được lưu dạng Markdown và JSON dưới `docs/02_test_plans_and_logs/runs/`. Full scans trên bảng trips chỉ chạy khi thêm `--include-large-scans`. Runner không gọi script ETL hoặc DDL/DML.
+Các kết quả được lưu dạng Markdown và JSON dưới `docs/test_plans_and_logs/runs/`. Full scans trên bảng trips chỉ chạy khi thêm `--include-large-scans`. Runner không gọi script ETL hoặc DDL/DML.
 
 ## dbt: Dimension và Fact
 
@@ -266,45 +265,40 @@ OLAP mart và Power BI chưa được triển khai.
 
 ## Quy trình làm việc với Git
 
-Nhóm sử dụng các nhánh `main`, `develop` và nhánh tính năng `feat/<phạm-vi>-<tên>`. Không push trực tiếp lên `main` hoặc `develop`; tạo Pull Request từ nhánh tính năng vào `develop` để review.
+Repo cá nhân, một người phát triển. Quy trình: tạo nhánh từ `main` mới nhất → commit → push → workflow `auto-pr.yml` tự mở Pull Request vào `main` → CI (`ci.yml`) chạy theo `push` → merge. Repo bật *Automatically delete head branches*, nên sau khi merge chỉ cần dọn nhánh local.
 
 ```powershell
 # Lấy code
-git clone https://github.com/nguyenanhtuan2702/NYC_TAXI.git
-Set-Location NYC_TAXI
-git checkout develop
-git checkout -b feat/staging-ten-cua-ban
+git clone https://github.com/thinhdao-77/NYC_TAXI_DataPipeline.git
+Set-Location NYC_TAXI_DataPipeline
 
-# Cập nhật nhánh làm việc từ develop
-git fetch origin
-git merge origin/develop
+# Tạo nhánh từ main mới nhất
+git checkout main
+git pull --ff-only
+git checkout -b feat/<pham-vi>
 
 # Kiểm tra và lưu thay đổi
 git status
 git add <duong-dan-file>
-git commit -m "feat(staging): describe the change"
-git push -u origin feat/staging-ten-cua-ban
+git commit -m "feat(<scope>): describe the change"
+git push -u origin feat/<pham-vi>
+
+# Sau khi merge PR
+git checkout main
+git pull --ff-only
+.	asks.ps1 prune-branches
 ```
 
-Không dùng `git add .` một cách máy móc. Kiểm tra `git status` để tránh đưa `.env`, dữ liệu lớn, file sinh tự động hoặc thay đổi không thuộc phạm vi của mình vào commit.
+Không dùng `git add .` một cách máy móc. Kiểm tra `git status` để tránh đưa `.env`, dữ liệu lớn, file `.pbix` hoặc file sinh tự động vào commit.
 
-### Quy ước commit gợi ý
+### Quy ước commit
 
 ```text
 <type>(<scope>): <mô tả ngắn>
 ```
 
-Một số type thường dùng: `feat`, `fix`, `test`, `docs`, `chore`, `refactor`. Scope có thể là `staging`, `mage`, `dbt`, `dim`, `fact`, `olap`, `pbi` hoặc `report`.
+Một số type thường dùng: `feat`, `fix`, `test`, `docs`, `chore`, `refactor`. Scope có thể là `staging`, `mage`, `dbt`, `dim`, `fact`, `olap`, `powerbi` hoặc `docs`.
 
-## Phân công và lộ trình
-
-Phân công dưới đây là định hướng làm việc của nhóm; cập nhật theo quyết định mới nhất của nhóm nếu có thay đổi.
-
-| Phạm vi | Trách nhiệm dự kiến | Thư mục chính |
-|---|---|---|
-| Ingestion và Staging | Nạp nguồn, DDL, kiểm tra dữ liệu | `sql/ddl/`, `sql/profiling/`, `mage/data_loaders/`, `mage/data_exporters/`, `dbt/models/staging/` |
-| Dimension | Xây dựng các bảng Dimension và dữ liệu danh mục | `dbt/seeds/`, `dbt/models/dds/dimensions/` |
-| Fact và OLAP | Xây dựng bảng Fact và truy vấn phân tích | `dbt/models/dds/facts/`, `dbt/models/olap_marts/` |
-| Kiểm thử và tích hợp | Test, pipeline end-to-end và tài liệu nhóm | `dbt/tests/`, `mage/pipelines/`, `docs/`, `README.md` |
+## Lộ trình
 
 Lộ trình hoàn thiện gồm: triển khai cấu hình và model dbt; xây dựng DDS/OLAP; tích hợp pipeline end-to-end; bổ sung kiểm thử; sau đó hoàn thiện Power BI và báo cáo. Chỉ đánh dấu các hạng mục là hoàn thành khi code và hướng dẫn chạy tương ứng đã có trong repo và được kiểm thử.
