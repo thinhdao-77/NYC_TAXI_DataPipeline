@@ -22,7 +22,7 @@ Chạy trong container Mage (có sẵn thư viện `duckdb` 1.5.x, cùng phiên 
 docker compose exec -T mage python /home/src/tests/run_quality_tests.py --suite deep --scope fact
 ```
 
-Mỗi lượt chạy ghi `docs/02_test_plans_and_logs/runs/run_<thời điểm UTC>.json` và `.md` (không commit, trừ bản mẫu). Mã thoát: `0` không có FAIL/BLOCKED, `1` có FAIL, `2` có BLOCKED. Trạng thái: `PASS`, `FAIL`, `BLOCKED` (không chạy được do điều kiện trước chưa đạt), `NOT RUN` (cần `--include-large-scans`), `NOT APPLICABLE`.
+Mỗi lượt chạy ghi `docs/test_plans_and_logs/runs/run_<thời điểm UTC>.json` và `.md` (không commit, trừ bản mẫu). Mã thoát: `0` không có FAIL/BLOCKED, `1` có FAIL, `2` có BLOCKED. Trạng thái: `PASS`, `FAIL`, `BLOCKED` (không chạy được do điều kiện trước chưa đạt), `NOT RUN` (cần `--include-large-scans`), `NOT APPLICABLE`.
 
 **An toàn:** database mở bằng `duckdb.connect(read_only=True)`; preflight chứng minh bằng cách thử một lệnh `CREATE TABLE` và yêu cầu nó bị từ chối. Runner không gọi Mage, dbt, DDL hay DML. DuckDB chỉ cho một tiến trình ghi: nếu pipeline Mage hoặc dbt đang chạy, preflight báo `BLOCKED`.
 
@@ -63,7 +63,7 @@ Một tầng chỉ chạy deep khi các bảng của nó (và tầng phụ thu�
 
 - `.\tasks.ps1 qa full`: **53 PASS, 0 FAIL, 1 NOT APPLICABLE** (`PF-COMPOSE-01` trong container), ~32 s. Kiểm tra lâu nhất: `STG-VAL-01` ~15 s.
 - **Kiểm thử âm tính:** bản sao chỉ có 2 tháng, cố ý nạp trùng 10 dòng file 2024-01 và xóa 1 dòng file 2024-02 → `RAW-DUP-01` FAIL đúng 2 file, `RAW-REC-03` FAIL, mã thoát 1. (`RAW-CMP-01` cũng FAIL vì bảng thử tạo bằng `CREATE TABLE AS` không giữ ràng buộc NOT NULL: đúng hành vi.)
-- Bản mẫu được commit: `docs/02_test_plans_and_logs/runs/run_20261118T115030Z.*`. Bản `run_20261026T034420Z.*` là bản mẫu cũ trên PostgreSQL.
+- Bản mẫu được commit: `docs/test_plans_and_logs/runs/run_20261118T115030Z.*`. Bản `run_20261026T034420Z.*` là bản mẫu cũ trên PostgreSQL.
 
 ## dbt test
 
@@ -76,4 +76,4 @@ Một tầng chỉ chạy deep khi các bảng của nó (và tầng phụ thu�
 
 `dbt build` toàn bộ (18/11/2026): 98/98 PASS, ~3 phút 12 giây (gồm build lại Fact từ đầu).
 
-Kế hoạch kiểm thử và các phát hiện cũ: [test-plan.md](../02_test_plans_and_logs/test-plan.md) (viết cho giai đoạn PostgreSQL).
+Kế hoạch kiểm thử và các phát hiện cũ: [test-plan.md](../test_plans_and_logs/test-plan.md) (viết cho giai đoạn PostgreSQL).

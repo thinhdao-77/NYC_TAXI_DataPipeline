@@ -1,6 +1,6 @@
 # OLAP mart (schema `olap`)
 
-Các bảng tổng hợp từ `dds.facttaxitrip` cho Power BI, xây bằng dbt (`dbt/models/olap_marts/`, materialized `table`). Mỗi mart phục vụ nhiều câu hỏi trong `docs/01_data_modeling/modeling.pdf` (mục 6), thay vì mỗi câu một bảng: ít logic trùng lặp, Power BI vẫn slice/dice tự do trong từng mart.
+Các bảng tổng hợp từ `dds.facttaxitrip` cho Power BI, xây bằng dbt (`dbt/models/olap_marts/`, materialized `table`). Mỗi mart phục vụ nhiều câu hỏi trong `docs/data_modeling/modeling.pdf` (mục 6), thay vì mỗi câu một bảng: ít logic trùng lặp, Power BI vẫn slice/dice tự do trong từng mart.
 
 ## Các mart
 

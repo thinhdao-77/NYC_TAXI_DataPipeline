@@ -1,15 +1,13 @@
-# NYC TAXI - HƯỚNG DẪN TRIỂN KHAI & BÀN GIAO TẦNG FACT (DDS)
+# NYC TAXI - HƯỚNG DẪN TRIỂN KHAI TẦNG FACT (DDS)
 
 > **Cập nhật 18/11/2026 (DuckDB):** Fact chạy bằng **dbt-duckdb** trên cùng file DuckDB với Mage (`data/warehouse/nyc_taxi.duckdb`, bảng `dds.facttaxitrip`), xem [mục 0](#0-chạy-trên-duckdb-dbt). Các mục 3 và 5 bên dưới mô tả bản PostgreSQL cũ (lệnh `psql`, bản SQL thủ công ở `sql/warehouse/`), giữ lại để tham khảo; PostgreSQL không còn trong `docker-compose.yml`. SK trong dbt sinh ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`), khác với `SERIAL` trong bản SQL cũ.
 
 
 Tài liệu này mô tả chi tiết thiết kế, quy tắc làm sạch dữ liệu, quy trình ETL và kịch bản kiểm thử nghiệm thu cho bảng dữ kiện trung tâm **`dds.FactTaxiTrip`** thuộc mô hình kho dữ liệu NYC Yellow Taxi (Star Schema).
 
-- **Người phụ trách:** Thịnh (Người 3 - Tầng Fact)
-- **Nguồn dữ liệu:** `stage.stg_yellow_taxi_trips` (do Vân nạp) kết hợp 8 bảng Dimension trong `dds` (do Khoa tạo).
-- **Căn cứ thiết kế:** Tuân thủ 100% tài liệu `modeling.pdf` (Trang 3–6) và phân công `Giai đoạn 1 NYC Yellow Taxi Trip.pdf`.
+- **Nguồn dữ liệu:** `stage.stg_yellow_taxi_trips` kết hợp 8 bảng Dimension trong `dds`.
+- **Căn cứ thiết kế:** tài liệu `docs/data_modeling/modeling.pdf` (trang 3–6).
 - **Đích đến:** model dbt `dbt/models/dds/facts/fact_taxi_trips.sql` → `dds.facttaxitrip` (DuckDB). Trước 18/11/2026: `dds.FactTaxiTrip` trên PostgreSQL.
-- **Đối tượng bàn giao:** Bee (Người 4 - QA/Tester), Tuấn (Tổng hợp báo cáo), và người làm Power BI / OLAP tiếp theo.
 
 ---
 
@@ -174,9 +172,9 @@ Chạy kiểm thử dbt:
 
 ---
 
-## 5. Thông tin Bàn giao Kiểm thử (Dành cho Bee & Tuấn) — số liệu PostgreSQL cũ, xem mục 0 cho số liệu DuckDB
+## 5. Tiêu chí nghiệm thu và kết quả kiểm thử — số liệu PostgreSQL cũ, xem mục 0 cho số liệu DuckDB
 
-Dưới đây là các tiêu chuẩn nghiệm thu và kết quả đo đạc thực tế để Bee đưa vào **Test Plan** và Tuấn đưa vào **Báo cáo**:
+Dưới đây là các tiêu chuẩn nghiệm thu và kết quả đo đạc thực tế (dùng cho test plan và báo cáo):
 
 ### 5.1. Tiêu chí Nghiệm thu (Acceptance Criteria)
 - [x] **Toàn vẹn khóa ngoại (Referential Integrity):** Không có bản ghi nào bị lỗi trỏ sai khóa Dimension (`0 lỗi`). Toàn bộ 16 tests của dbt đạt **PASS 100%**.

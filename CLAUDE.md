@@ -45,7 +45,7 @@ Khi chạy `docker compose run/exec` với đường dẫn Linux từ Git Bash, 
 - `sql/ddl`: DDL `raw`/`control`. `sql/profiling`: truy vấn đo lỗi trên `raw.*` (chạy `.\tasks.ps1 profile <file>`). `sql/run_sql.py`: chạy SQL chỉ đọc cho `tasks.ps1 sql/profile`. `sql/warehouse`: bản SQL thủ công cũ (PostgreSQL), chỉ tham khảo.
 - `powerbi/`: `scripts/export_bi.py` (DuckDB → Parquet, read_only), `scripts/build_map_shapes.py` (shapefile → TopoJSON), `queries/*.pq` (Power Query), `dax/measures.dax`, `map_shapes/`. Power BI đọc Parquet, không đọc file DuckDB trực tiếp. Hướng dẫn: `docs/guides/powerbi.md`.
 - `tests/run_quality_tests.py`: runner QA chỉ đọc trên DuckDB (`duckdb.connect(read_only=True)`), chạy trong container qua `.\tasks.ps1 qa`; không chạy được khi Mage/dbt đang ghi.
-- `docs/guides/`: hướng dẫn từng phần. `docs/02_test_plans_and_logs/runs/`: log tự sinh, không commit (trừ một bản mẫu).
+- `docs/guides/`: hướng dẫn từng phần. `docs/test_plans_and_logs/runs/`: log tự sinh, không commit (trừ một bản mẫu).
 
 ## Lưu ý về CI
 
