@@ -30,7 +30,7 @@ Parquet nguồn → Mage ingestion → DuckDB (`raw`) → dbt staging → Dimens
 | Data modeling docs | Một phần | `docs/01_data_modeling/modeling.pdf` (Giai đoạn 1 của nhóm: business event, 8 Dimension, Fact, measures, truy vấn kiểm chứng Star Schema); sơ đồ Star Schema chỉ có qua link Google Drive trong PDF |
 | OLAP mart | **Hoàn thành, chạy trên DuckDB** | 5 mart trong schema `olap` (`mart_trips_daily`, `mart_hourly_activity`, `mart_routes_monthly`, `mart_trip_profile`, `mart_monthly_kpi`) phục vụ A1–A8, B1–B5 của modeling.pdf; tổng khớp Fact. Hướng dẫn: [guides/olap.md](guides/olap.md) |
 | Pipeline ELT end-to-end | **Chưa có** | Cần pipeline Mage: ingest → `dbt build` |
-| Power BI | **Đã chuẩn bị, chờ dựng báo cáo** | `.\tasks.ps1 export-bi` xuất 5 mart + 7 Dimension ra `data/bi/*.parquet`; `powerbi/queries/*.pq` (Power Query), `powerbi/dax/measures.dax` (119 measure), `powerbi/map_shapes/` (TopoJSON 263 zone + tâm khu vực); hướng dẫn dựng model và 7 trang báo cáo: [guides/powerbi.md](guides/powerbi.md). File `.pbix` do người dùng dựng trong Power BI Desktop |
+| Power BI | **Đã dựng 7 trang, chờ đối chiếu số liệu** | `.\tasks.ps1 export-bi` xuất 5 mart + 7 Dimension ra `data/bi/*.parquet`; `powerbi/queries/*.pq` (Power Query), `powerbi/dax/measures.dax` (119 measure), `powerbi/map_shapes/` (TopoJSON 263 zone + tâm khu vực); hướng dẫn dựng model và 7 trang: [guides/powerbi.md](guides/powerbi.md). Template `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (không chứa dữ liệu); `.pbix` có dữ liệu chỉ giữ ở máy |
 
 ## 3. Chi tiết phần đã làm
 
@@ -77,7 +77,7 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 10. `is_total_mismatch` dựa trên quy luật quan sát từ dữ liệu (`extra` đã gồm phụ phí ở nhiều dòng), không phải định nghĩa chính thức của TLC; còn 384.360 dòng lệch thật (0,43%) chưa phân tích nguyên nhân.
 9. DuckDB không tự thu hồi chỗ của dòng đã xóa khi nạp lại một file; nạp lại nhiều lần làm file phình. Thu gọn bằng `COPY FROM DATABASE` sang file mới khi cần.
 7. `data/reference/taxi_zones.zip` (nhị phân) vẫn nằm trong git; nay là nguồn của `powerbi/map_shapes/` (`tasks.ps1 build-map`) nên giữ lại.
-13. Báo cáo Power BI chưa được dựng và kiểm chứng trên Power BI Desktop: truy vấn M và measure DAX mới được kiểm tra tự động (mọi cột tham chiếu tồn tại trong file xuất), chưa chạy trong Power BI. Shape map là tính năng preview của Power BI.
+13. Báo cáo Power BI đã dựng đủ 7 trang (template `.pbit`), nhưng số liệu trên dashboard chưa được đối chiếu với mục 5 của `guides/powerbi.md`. Shape map là tính năng preview của Power BI.
 
 ## 5. Cấu trúc thư mục hiện tại
 
@@ -104,12 +104,12 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 
 ## 6. Việc nên làm tiếp
 
-1. Dựng báo cáo Power BI theo [guides/powerbi.md](guides/powerbi.md), đối chiếu số liệu ở mục 5 của hướng dẫn, lưu `powerbi/nyc_taxi.pbit` và ảnh chụp dashboard cho README.
+1. Đối chiếu số liệu dashboard với mục 5 của [guides/powerbi.md](guides/powerbi.md); chụp ảnh dashboard (`powerbi/screenshots/`) và cập nhật README.
 2. Quyết định giữ hay bỏ `sql/warehouse/`; thống nhất `TripSK` cho Fact.
 3. Chuyển nội dung `modeling.pdf` thành markdown + ERD trong repo (sơ đồ hiện chỉ có qua link Google Drive) và bổ sung data dictionary.
 4. ~~Xây OLAP mart~~: xong ở bước 5.
 5. Pipeline Mage end-to-end: ingest → `dbt build`.
-6. ~~Chuẩn bị dữ liệu Power BI~~: xong ở bước 6; còn dựng dashboard (việc 1).
+6. ~~Chuẩn bị dữ liệu Power BI, dựng dashboard~~: xong ở bước 6 (template `.pbit`); còn đối chiếu số liệu và ảnh chụp (việc 1).
 
 ## 7. Nhật ký thay đổi
 
@@ -217,6 +217,31 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 - **Kiểm tra:**
   - Số liệu đối chiếu tính bằng SQL trên `data/bi/` (mart giờ nối `dimdate`): 731 ngày (366 + 365); trung bình 117.298,6 / 110.443,6 / 124.172,3 lượt đón mỗi ngày.
   - Chưa chạy trong Power BI Desktop.
+
+### 21/11/2026 — Bỏ tài liệu thiết kế dashboard
+- **Theo yêu cầu người dùng**, xóa `docs/guides/powerbi_design.md`. Bản dựng cuối nằm trong template `.pbit`.
+  - File vẫn còn trong lịch sử git (commit `7589b52`).
+  - Các mục nhật ký cũ nhắc tới file được giữ nguyên làm lịch sử.
+- **Sửa liên kết** còn trỏ tới file:
+  - `docs/guides/powerbi.md` mục 3: ghi chú đầu bảng và dòng trang 7;
+  - `docs/PROJECT_STATUS.md`: bảng trạng thái, lỗi đã biết số 13, việc nên làm 1 (đối chiếu theo mục 5 của `powerbi.md`);
+  - `README.md`: dòng trạng thái Power BI.
+- **Kiểm tra:** `grep powerbi_design` trên repo chỉ còn kết quả trong các mục nhật ký cũ.
+
+### 21/11/2026 — Template Power BI (.pbit)
+- **Người dùng** dựng đủ 7 trang trong Power BI Desktop và xuất `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (328 KB).
+  - `.pbix` cùng thư mục (125 MB, có dữ liệu) bị `.gitignore` (`powerbi/**/*.pbix`) bỏ qua.
+- **Tài liệu:**
+  - `docs/guides/powerbi.md` mục lưu file: đổi đường dẫn `.pbit`/`.pbix` sang `powerbi/dashboard/`.
+  - Bảng trạng thái, lỗi đã biết số 13, việc nên làm 1 và 6 cập nhật theo.
+  - `README.md`: sửa dòng trạng thái Power BI.
+- **Kiểm tra** (đọc nội dung zip của `.pbit` bằng Python):
+  - Không có phần `DataModel`, tức không chứa dữ liệu.
+  - `DataModelSchema` có 14 bảng, 119 measure, 16 quan hệ. Báo cáo có 7 trang.
+  - Tham số `RepoFolder` để trống, nên khi mở file sẽ hỏi thư mục repo.
+  - Không tìm thấy đường dẫn `C:\Users\...` hay địa chỉ email.
+  - File có `UnappliedChanges`: còn thay đổi Power Query chưa Apply lúc xuất.
+  - Số liệu trên dashboard chưa được đối chiếu.
 
 ### 20/11/2026 — Thiết kế dashboard trang 7: Trends & Comparisons (B2, B3, B4)
 - **Thiết kế** `docs/guides/powerbi_design.md` mục 11 (mới):
