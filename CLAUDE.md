@@ -34,13 +34,15 @@ Kho dữ liệu NYC Yellow Taxi 2024–2025, dự án cá nhân cho CV. Pipeline
 .\tasks.ps1 dbt-build [selector]  # dbt trong container
 .\tasks.ps1 qa full               # runner QA chỉ đọc trên DuckDB (smoke | deep | all | full)
 .\tasks.ps1 export-bi             # xuất mart + Dimension ra data/bi/*.parquet cho Power BI
+.\tasks.ps1 e2e                   # pipeline Mage nyc_taxi_e2e qua scheduler: ingest -> dbt build -> QA -> export-bi
+.\tasks.ps1 status                # lần chạy thành công gần nhất, cảnh báo lỗi gần đây
 ```
 
 Khi chạy `docker compose run/exec` với đường dẫn Linux từ Git Bash, đặt `MSYS_NO_PATHCONV=1` để Git Bash không đổi `/home/src/...` thành đường dẫn Windows.
 
 ## Cấu trúc
 
-- `mage/`: ingestion (pipelines `ingest_zone_lookup`, `ingest_yellow_trips`) ghi vào schema `raw` của DuckDB; helper chung ở `mage/utils/duckdb_helpers.py`, DDL ở `sql/ddl/`.
+- `mage/`: ingestion (pipelines `ingest_zone_lookup`, `ingest_yellow_trips`) ghi vào schema `raw` của DuckDB; helper chung ở `mage/utils/duckdb_helpers.py`, DDL ở `sql/ddl/`. Pipeline `nyc_taxi_e2e` nối ingestion với các block `mage/custom/` (dbt build qua subprocess `/opt/dbt/bin/dbt`, QA, xuất Power BI); lịch ở `triggers.yaml` (cron theo UTC, Mage tự viết lại file; trigger API `manual_e2e` cho `tasks.ps1 e2e` qua `mage/utils/trigger_run.py`). Lỗi block gọi callback `mage/callbacks/notify_pipeline_failure.py` → `data/warehouse/alerts/pipeline_alerts.jsonl` + `ALERT_WEBHOOK_URL` (chỉ khi chạy qua scheduler, không với `mage run`). Ingestion chặn schema drift và nạp lại file TLC đã phát hành lại (`control.source_file_meta`). Giao diện Mage chỉ bind `127.0.0.1`. Hướng dẫn: `docs/guides/pipeline.md`.
 - `dbt/`: transform chính, adapter **dbt-duckdb** (cùng file DuckDB với Mage). `sources.yml` trỏ `raw.*`; staging (`models/staging`, view trong schema `stage`) giữ đủ dòng và gắn cờ `is_*`, `is_valid_for_fact`; Dimension/Fact đọc staging bằng `ref()`. Dimension dùng SK ổn định từ khóa tự nhiên (vd `DateSK = YYYYMMDD`); `dim_location` là SCD Type 2 từ snapshot `snap_taxi_zone_lookup` (SK = `LocationID*100 + VersionNo`, Fact tra theo khoảng hiệu lực). Fact lọc `is_valid_for_fact`, incremental `delete+insert` theo `sourcefilename` (lấy batch mới hơn `max(batchid)`), nạp lại một file không làm trùng. OLAP mart (`models/olap_marts`, schema `olap`) dùng macro `olap_trip_measures`, chỉ lưu tổng cộng dồn được.
 - `sql/ddl`: DDL `raw`/`control`. `sql/profiling`: truy vấn đo lỗi trên `raw.*` (chạy `.\tasks.ps1 profile <file>`). `sql/run_sql.py`: chạy SQL chỉ đọc cho `tasks.ps1 sql/profile`. `sql/warehouse`: bản SQL thủ công cũ (PostgreSQL), chỉ tham khảo.
 - `powerbi/`: `scripts/export_bi.py` (DuckDB → Parquet, read_only), `scripts/build_map_shapes.py` (shapefile → TopoJSON), `queries/*.pq` (Power Query), `dax/measures.dax`, `map_shapes/`. Power BI đọc Parquet, không đọc file DuckDB trực tiếp. Hướng dẫn: `docs/guides/powerbi.md`.

@@ -3,8 +3,12 @@
 - Tự tải file còn thiếu từ nguồn TLC vào data/raw (retry, tải vào .tmp rồi mới đổi tên).
 - Mỗi file nạp trong một transaction: xóa các dòng cũ của file đó rồi INSERT lại, nên chạy lại không trùng.
 - Ghi log từng file vào control.etl_control; LSET tính từ log này.
+- Schema drift: file thiếu cột bắt buộc thì FAILED (không nạp NULL âm thầm); cột lạ thì cảnh báo.
+- Phát hiện TLC phát hành lại file: so ETag/kích thước (HEAD) với control.source_file_meta;
+  file đã SUCCESS nhưng nguồn đã đổi thì tải lại và nạp lại.
 
-Biến pipeline: file_name (tên file hoặc ALL), year, start_month, end_month, use_lset.
+Biến pipeline: file_name (tên file hoặc ALL), year, start_month, end_month, use_lset,
+check_source_updates (mặc định true), force_download (mặc định false: dùng file đã có trong data/raw).
 """
 import os
 import re
@@ -54,8 +58,66 @@ TARGET = {
 }
 
 
-def to_bool(v):
+# Cột được phép thiếu trong file nguồn: cbd_congestion_fee chỉ có từ 2025-01 (phí CBD bắt đầu 01/2025).
+OPTIONAL_COLUMNS = {'cbd_congestion_fee': '2025-01'}  # cột -> tháng đầu tiên bắt buộc có
+
+
+def to_bool(v, default=False):
+    if v is None or str(v).strip() == '':
+        return default
     return str(v).strip().lower() in ('1', 'true', 'yes', 'y')
+
+
+def remote_metadata(file_name, timeout=30):
+    """HEAD file trên TLC. Trả về dict (etag, content_length, last_modified) hoặc None nếu lỗi mạng."""
+    req = urllib.request.Request(f'{BASE_URL}/{file_name}', method='HEAD',
+                                 headers={'User-Agent': 'Mozilla/5.0'})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            length = resp.headers.get('Content-Length')
+            return {'etag': (resp.headers.get('ETag') or '').strip('"') or None,
+                    'content_length': int(length) if length else None,
+                    'last_modified': resp.headers.get('Last-Modified')}
+    except Exception as e:
+        print(f'[SOURCE CHECK WARN] {file_name}: không lấy được metadata ({e})')
+        return None
+
+
+def save_metadata(con, file_name, meta, batch_id=None):
+    if not meta:
+        return
+    con.execute('DELETE FROM control.source_file_meta WHERE source_file_name = ?', [file_name])
+    con.execute('INSERT INTO control.source_file_meta (source_file_name, etag, content_length, '
+                'last_modified, batch_id) VALUES (?, ?, ?, ?, ?)',
+                [file_name, meta['etag'], meta['content_length'], meta['last_modified'], batch_id])
+
+
+def source_changed(con, file_name):
+    """(đã đổi?, lý do) cho một file đã nạp SUCCESS.
+
+    Có bản ghi trong control.source_file_meta: so ETag (nếu cả hai có) hoặc kích thước.
+    Chưa có (file nạp trước khi có bảng này): so kích thước file local với Content-Length;
+    khớp thì ghi làm mốc, không nạp lại.
+    """
+    meta = remote_metadata(file_name)
+    if meta is None:
+        return False, 'không kiểm tra được nguồn'
+    row = con.execute('SELECT etag, content_length FROM control.source_file_meta '
+                      'WHERE source_file_name = ?', [file_name]).fetchone()
+    if row:
+        etag, length = row
+        if etag and meta['etag']:
+            if etag != meta['etag']:
+                return True, f'ETag đổi {etag} -> {meta["etag"]}'
+        elif length and meta['content_length'] and length != meta['content_length']:
+            return True, f'kích thước đổi {length:,} -> {meta["content_length"]:,} byte'
+        return False, 'nguồn không đổi'
+    local = os.path.join(RAW_DIR, file_name)
+    if os.path.exists(local) and meta['content_length'] and os.path.getsize(local) != meta['content_length']:
+        return True, (f'file local {os.path.getsize(local):,} byte khác nguồn '
+                      f'{meta["content_length"]:,} byte')
+    save_metadata(con, file_name, meta)
+    return False, 'ghi mốc phiên bản nguồn'
 
 
 def download_file_with_retry(file_name, max_retries=3):
@@ -93,10 +155,25 @@ def download_file_with_retry(file_name, max_retries=3):
 
 
 def build_insert_sql(con, path):
-    """SELECT khớp cột theo tên; cột không có trong file (vd cbd_congestion_fee năm 2024) thành NULL."""
+    """SELECT khớp cột theo tên (không phân biệt hoa thường).
+
+    Thiếu cột bắt buộc thì lỗi: nếu nạp NULL, Fact sẽ COALESCE thành 0 (vd tiền boa = 0) mà không
+    ai biết. Chỉ cột trong OPTIONAL_COLUMNS được thiếu ở các tháng trước tháng bắt buộc (thành NULL).
+    """
     source_cols = {r[0].lower(): r[0] for r in
                    con.execute('SELECT column_name FROM (DESCRIBE SELECT * FROM read_parquet(?))',
                                [path]).fetchall()}
+    match = re.search(r'(\d{4}-\d{2})\.parquet$', os.path.basename(path))
+    file_month = match.group(1) if match else '9999-99'
+    missing = [t for t, (src, _) in TARGET.items()
+               if src.lower() not in source_cols
+               and not (t in OPTIONAL_COLUMNS and file_month < OPTIONAL_COLUMNS[t])]
+    if missing:
+        raise ValueError(f'Schema drift: file thiếu cột bắt buộc {missing}; '
+                         f'cột hiện có: {sorted(source_cols.values())}')
+    extra = sorted(set(source_cols) - {src.lower() for src, _ in TARGET.values()})
+    if extra:
+        print(f'[SCHEMA WARN] {os.path.basename(path)}: cột mới chưa được nạp {extra}')
     select = []
     for target, (source, sql_type) in TARGET.items():
         actual = source_cols.get(source.lower())
@@ -109,13 +186,19 @@ def build_insert_sql(con, path):
             f'FROM read_parquet(?, file_row_number = true)')
 
 
-def load_one(con, file_name, cet=None):
+def load_one(con, file_name, cet=None, force_download=False):
     if not FILE_PATTERN.fullmatch(file_name):
         raise ValueError(f'Tên file không hợp lệ: {file_name!r} (yellow_tripdata_YYYY-MM.parquet)')
     started = datetime.now()
     cet = cet or started
     batch_id = next_batch_id(con)
 
+    local = os.path.join(RAW_DIR, file_name)
+    if force_download and os.path.exists(local):
+        print(f'[DOWNLOAD] tải lại {file_name} (bỏ bản local)')
+        os.remove(local)
+    # Phiên bản nguồn chỉ biết chắc khi vừa tải; dùng lại file local cũ thì để source_changed() ghi mốc.
+    meta = remote_metadata(file_name) if not os.path.exists(local) else None
     ok, reason = download_file_with_retry(file_name)
     if not ok:
         write_log(con, PIPELINE_NAME, batch_id, file_name, cet, None, 0, 'FAILED',
@@ -139,6 +222,8 @@ def load_one(con, file_name, cet=None):
             pass
 
     write_log(con, PIPELINE_NAME, batch_id, file_name, cet, rows_read, loaded, status, err, started)
+    if status == 'SUCCESS':
+        save_metadata(con, file_name, meta, batch_id)
     read_txt = f'{rows_read:,}' if rows_read is not None else '?'
     print(f'[{status}] {file_name} | đọc {read_txt} | nạp {loaded:,} | batch {batch_id} | {err or ""}')
     if status == 'FAILED':
@@ -167,7 +252,9 @@ def load_trips_to_raw(*args, **kwargs):
     year = kwargs.get('year')
     start_month = kwargs.get('start_month')
     end_month = kwargs.get('end_month')
-    use_lset = to_bool(kwargs.get('use_lset', False))
+    use_lset = to_bool(kwargs.get('use_lset'), False)
+    check_updates = to_bool(kwargs.get('check_source_updates'), True)
+    force_download = to_bool(kwargs.get('force_download'), False)
     cet = datetime.now()
 
     con = connect()
@@ -175,7 +262,7 @@ def load_trips_to_raw(*args, **kwargs):
         init_schema(con)
 
         if file_name and file_name != 'ALL':
-            load_one(con, file_name, cet=cet)
+            load_one(con, file_name, cet=cet, force_download=force_download)
             return
 
         lset_month, done = get_lset_month(con)
@@ -196,11 +283,16 @@ def load_trips_to_raw(*args, **kwargs):
 
         failed = []
         for f in files:
-            if f in done:
-                print(f'[SKIP] đã SUCCESS: {f}')
-                continue
+            reload_file = force_download
+            if f in done and not force_download:
+                changed, why = source_changed(con, f) if check_updates else (False, 'không kiểm tra')
+                if not changed:
+                    print(f'[SKIP] đã SUCCESS: {f} ({why})')
+                    continue
+                print(f'[SOURCE UPDATED] {f}: {why} -> tải lại và nạp lại')
+                reload_file = True
             try:
-                load_one(con, f, cet=cet)
+                load_one(con, f, cet=cet, force_download=reload_file)
             except Exception as e:
                 print(f'[FILE FAILED] {f}: {e}')
                 failed.append(f)

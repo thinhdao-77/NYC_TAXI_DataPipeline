@@ -49,6 +49,7 @@ Kết quả 18/11/2026: 12 file, ~110 MB (`mart_trips_daily` 64 MB, `mart_routes
 | `RoutesMonthly` | `mart_routes_monthly` | Thêm `monthkey`, `route` = "khu vực đón → khu vực trả" |
 | `TripProfile`, `MonthlyKPI` | `mart_trip_profile`, `mart_monthly_kpi` | Thêm `monthkey` |
 | `RevenueComponent` | bảng tĩnh trong M (không đọc file) | 8 khoản doanh thu + `componentorder`, cho waterfall trang 7; **không tạo quan hệ** |
+| `DataFreshness` (tùy chọn) | `data/bi/_manifest.json` | Một dòng: thời điểm xuất dữ liệu (UTC và giờ VN), cho card "Data as of" (mục 6); **không tạo quan hệ** |
 
 ### 2.2 Quan hệ (Model view)
 
@@ -133,5 +134,12 @@ Lệch so với bảng này thường do: thiếu quan hệ hoặc quan hệ sai
 
 ## 6. Lưu và cập nhật
 
-- **Refresh** sau khi pipeline chạy lại: `.\tasks.ps1 export-bi` rồi Home > Refresh trong Power BI.
+- **Refresh** sau khi pipeline chạy lại (`.\tasks.ps1 e2e`, hoặc chỉ `.\tasks.ps1 export-bi`): Home > Refresh trong Power BI.
+- **Card "Data as of"** (tùy chọn, cho người xem biết dữ liệu mới đến đâu). Truy vấn `powerbi/queries/DataFreshness.pq` đọc `exported_at_utc` trong `data/bi/_manifest.json`, giá trị do bước cuối của pipeline ghi.
+  1. Transform data > New Source > Blank Query, đặt tên `DataFreshness`, dán nội dung file, Close & Apply. **Không tạo quan hệ.**
+  2. Tạo measure này **trong bảng `DataFreshness`**: ở pane Data, chuột phải `DataFreshness` > **New measure**, dán công thức. Measure không nằm trong `measures.dax`, vì nếu dán cả file vào model chưa có bảng `DataFreshness` thì sẽ báo lỗi:
+     ```dax
+     Data As Of = "Data as of " & FORMAT ( MAX ( DataFreshness[exported_at_local] ), "yyyy-mm-dd HH:mm" ) & " (UTC+7)"
+     ```
+  3. Đặt Card ở góc trên bên phải mỗi trang, chỗ trống ngang hàng tiêu đề trang: Format > General > Properties: X `1024`, Y `16`, Width `240`, Height `36`. Tắt nền, viền, nhãn category; giá trị căn phải, chữ 9 pt, màu `#8A94A3`. Mép phải (1264) thẳng với mép phải các bảng rộng 1048 px. Làm ở một trang rồi copy (Ctrl+C / Ctrl+V) sang các trang khác; Power BI giữ nguyên vị trí. Không đặt ở cuối thanh bên trái: ô ghi chú đã chiếm từ y 552 đến hết trang.
 - **Lưu file:** `powerbi/dashboard/NYC_Taxi_Dashboard.pbix` chứa cả dữ liệu đã nạp (khoảng 125 MB, vượt giới hạn 100 MB của GitHub) và bị `.gitignore` bỏ qua. File đưa vào git là template **File > Export > Power BI template**: `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (khoảng 330 KB: chỉ model, truy vấn, measure, báo cáo, không có dữ liệu). Mở `.pbit` thì Power BI hỏi `RepoFolder` (thư mục gốc repo), rồi nạp lại từ `data/bi/*.parquet`, nên cần chạy `.\tasks.ps1 export-bi` trước.

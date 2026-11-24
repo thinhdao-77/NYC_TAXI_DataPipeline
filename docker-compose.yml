@@ -19,8 +19,12 @@ services:
       DUCKDB_THREADS: ${DUCKDB_THREADS:-4}
       DUCKDB_TEMP_DIR: ${DUCKDB_TEMP_DIR:-/home/src/data/warehouse/tmp}
       RAW_DATA_DIR: ${RAW_DATA_DIR:-/home/src/data/raw}
+      # Webhook nhận cảnh báo khi pipeline lỗi (Slack/Discord/Teams); để trống = chỉ ghi file
+      # data/warehouse/alerts/pipeline_alerts.jsonl. Đặt trong .env, không commit URL.
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     ports:
-      - "6789:6789"
+      # Chỉ mở trên máy này: giao diện Mage chạy được code tùy ý trên thư mục repo (bind mount).
+      - "127.0.0.1:6789:6789"
     volumes:
       # Bind mount cả repo: Parquet (data/raw), file DuckDB (data/warehouse) và code
       # đều nằm trên máy host, nên Power BI / DBeaver trên Windows mở được trực tiếp.

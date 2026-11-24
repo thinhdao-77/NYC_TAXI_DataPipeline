@@ -15,7 +15,7 @@ Dự án xây dựng quy trình xử lý và phân tích dữ liệu **NYC Yello
 | Fact DDS | Model dbt incremental `dbt/models/dds/facts/fact_taxi_trips.sql` |
 | dbt | Có `dbt_project.yml`, `profiles.yml`, sources, test schema; `dbt parse` chạy được. Chưa chạy trên dữ liệu đầy đủ |
 | OLAP | Chưa có mart trong `dbt/models/olap_marts/` |
-| End-to-end ELT | Chưa có pipeline Mage gọi ingestion → dbt |
+| End-to-end ELT | Pipeline Mage `nyc_taxi_e2e` (Zone Lookup → chuyến đi → `dbt build` → QA → Parquet Power BI), lịch hằng tháng; chạy tay `.\tasks.ps1 e2e`. Hướng dẫn: [docs/guides/pipeline.md](docs/guides/pipeline.md) |
 | CI | GitHub Actions: kiểm tra cú pháp Python, `docker compose config`, `dbt parse` |
 | Power BI | Dashboard 7 trang, template `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (đọc Parquet từ `.\tasks.ps1 export-bi`); hướng dẫn: [docs/guides/powerbi.md](docs/guides/powerbi.md) |
 
