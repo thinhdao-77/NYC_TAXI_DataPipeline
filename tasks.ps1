@@ -11,7 +11,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'up', 'down', 'ps', 'logs', 'shell', 'sql', 'download-raw',
-                 'ingest-zones', 'ingest', 'profile', 'dbt-deps', 'dbt-run', 'dbt-test',
+                 'ingest-zones', 'ingest', 'e2e', 'e2e-direct', 'status', 'profile', 'dbt-deps', 'dbt-run', 'dbt-test',
                  'dbt-build', 'qa', 'export-bi', 'build-map', 'prune-branches')]
     [string]$Task = 'help',
 
@@ -35,7 +35,12 @@ function Invoke-DuckDb([string]$Sql) {
 function Invoke-MagePipeline([string]$Pipeline, [string]$VarsJson) {
     $cmd = @('compose', 'exec', '-T', 'mage', 'mage', 'run', '/home/src/mage', $Pipeline)
     if ($VarsJson) { $cmd += @('--runtime-vars', ($VarsJson -replace '"', '\"')) }
-    & docker @cmd
+    # Mage in WARNING ra stderr. Khi output bị chuyển hướng (log, Task Scheduler), PowerShell 5.1
+    # biến mỗi dòng stderr thành lỗi và $ErrorActionPreference = 'Stop' sẽ dừng script giữa chừng:
+    # tạm dùng 'Continue', kết quả lấy từ $LASTEXITCODE.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & docker @cmd 2>&1 | ForEach-Object { "$_" } } finally { $ErrorActionPreference = $prev }
 }
 
 # dbt chạy trong container Mage
@@ -55,6 +60,13 @@ Tasks:
   ingest [file | ALL | JSON]        Nạp chuyến đi vào raw.yellow_tripdata, mặc định ALL
                                     vd: ingest yellow_tripdata_2024-01.parquet
                                         ingest '{"file_name":"ALL","year":2024}'
+  e2e [JSON]                        Chạy pipeline nyc_taxi_e2e qua scheduler Mage (trigger manual_e2e:
+                                    có retry, cảnh báo, timeout như lượt theo lịch), đợi đến khi xong
+                                    Zone Lookup -> chuyến đi -> dbt build -> QA -> xuất Parquet Power BI
+                                    vd: e2e '{"file_name": "yellow_tripdata_2025-03.parquet"}'
+  e2e-direct [JSON]                 Chạy thẳng bằng `mage run` (không retry, không callback cảnh báo)
+  status                            Lần chạy e2e thành công gần nhất (cảnh báo nếu quá 35 ngày),
+                                    cảnh báo lỗi gần đây, trạng thái container
   profile <file.sql>                Chạy một truy vấn trong sql/profiling
   dbt-deps | dbt-run | dbt-test | dbt-build [selector]
                                     Chạy dbt trong container Mage (vd: dbt-build dim_vendor)
@@ -81,6 +93,48 @@ Tasks:
                 elseif ($Arg.TrimStart().StartsWith('{')) { $Arg }
                 else { '{"file_name": "' + $Arg + '"}' }
         Invoke-MagePipeline 'ingest_yellow_trips' $vars
+    }
+    'e2e' {
+        # Tạo lượt chạy cho trigger API manual_e2e; scheduler trong server Mage thực thi giống lượt
+        # theo lịch. PowerShell 5.1 làm mất dấu " khi truyền cho chương trình ngoài: escape thành \".
+        $cmd = @('compose', 'exec', '-T', 'mage', 'python', '/home/src/mage/utils/trigger_run.py')
+        if ($Arg) { $cmd += ($Arg -replace '"', '\"') }
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try { & docker @cmd 2>&1 | ForEach-Object { "$_" } } finally { $ErrorActionPreference = $prev }
+        if ($LASTEXITCODE -ne 0) { throw "Pipeline nyc_taxi_e2e lỗi (mã $LASTEXITCODE)" }
+    }
+    'e2e-direct' {
+        Invoke-MagePipeline 'nyc_taxi_e2e' $(if ($Arg) { $Arg } else { $null })
+        if ($LASTEXITCODE -ne 0) { throw "Pipeline nyc_taxi_e2e lỗi (mã $LASTEXITCODE)" }
+    }
+    'status' {
+        # Chạy trên máy host, không cần container. Lần xuất Parquet chỉ chạy khi mọi bước trước
+        # thành công, nên thời điểm xuất = lần chạy pipeline thành công gần nhất.
+        $manifest = 'data\bi\_manifest.json'
+        if (Test-Path $manifest) {
+            $exported = [datetimeoffset]::Parse((Get-Content $manifest -Raw -Encoding UTF8 | ConvertFrom-Json).exported_at_utc)
+            $age = [int]([datetimeoffset]::UtcNow - $exported).TotalDays
+            Write-Output ("Lần chạy thành công gần nhất (xuất Power BI): {0:yyyy-MM-dd HH:mm} UTC, cách đây {1} ngày" -f $exported.UtcDateTime, $age)
+            if ($age -gt 35) { Write-Warning 'Quá 35 ngày: lượt chạy theo lịch hằng tháng đã bị lỡ hoặc lỗi. Chạy .\tasks.ps1 e2e' }
+        } else {
+            Write-Warning "Chưa có $manifest (pipeline chưa từng chạy hết)"
+        }
+        $alerts = 'data\warehouse\alerts\pipeline_alerts.jsonl'
+        if (Test-Path $alerts) {
+            Write-Output 'Cảnh báo lỗi gần nhất:'
+            Get-Content $alerts -Encoding UTF8 -Tail 5 | ForEach-Object {
+                $a = $_ | ConvertFrom-Json
+                $msg = if ($a.error.Length -gt 150) { $a.error.Substring(0, 150) + '...' } else { $a.error }
+                Write-Output ("  {0}  {1} / {2}: {3}" -f $a.at_utc.Substring(0, 16), $a.pipeline, $a.block, $msg)
+            }
+        } else {
+            Write-Output 'Không có cảnh báo lỗi nào.'
+        }
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try { docker compose ps --format '{{.Name}}: {{.Status}}' 2>&1 | ForEach-Object { "Container $_" } }
+        finally { $ErrorActionPreference = $prev }
     }
     'profile' {
         if (-not $Arg) { throw 'Cần tên file, vd: .\tasks.ps1 profile 03_profile_by_vendor.sql' }

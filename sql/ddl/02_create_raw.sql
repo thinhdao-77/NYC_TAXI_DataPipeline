@@ -53,3 +53,14 @@ CREATE TABLE IF NOT EXISTS control.etl_control (
     started_at         TIMESTAMP,
     finished_at        TIMESTAMP
 );
+
+-- Phiên bản file nguồn đã nạp (theo HEAD của TLC). Mỗi lượt chạy so ETag/kích thước hiện tại với
+-- bản đã ghi: khác nhau nghĩa là TLC đã phát hành lại file, cần tải và nạp lại (load_trips_to_raw.py).
+CREATE TABLE IF NOT EXISTS control.source_file_meta (
+    source_file_name   VARCHAR PRIMARY KEY,
+    etag               VARCHAR,
+    content_length     BIGINT,
+    last_modified      VARCHAR,
+    batch_id           BIGINT,      -- lần nạp ứng với phiên bản này (NULL nếu chỉ ghi mốc ban đầu)
+    recorded_at        TIMESTAMP NOT NULL DEFAULT current_timestamp
+);

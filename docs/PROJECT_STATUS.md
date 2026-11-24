@@ -25,11 +25,11 @@ Parquet nguồn → Mage ingestion → DuckDB (`raw`) → dbt staging → Dimens
 | Runner QA (DuckDB) | **Hoàn thành, đã chạy** | `tests/run_quality_tests.py` viết lại cho DuckDB (read_only), kiểm tra xuyên tầng raw → stage → dds → olap; `.\tasks.ps1 qa full`: 53 PASS, 0 FAIL, ~32 s. Hướng dẫn: [guides/testing.md](guides/testing.md) |
 | Test plan + log | Một phần | `docs/test_plans_and_logs/`: test plan viết cho giai đoạn PostgreSQL; bản chạy mẫu `run_20261118T115030Z` (DuckDB) và `run_20261026T034420Z` (PostgreSQL cũ) |
 | CI / tự động hóa GitHub | **Hoàn thành, đã chạy thật trên GitHub** | `ci.yml` chạy khi push mọi nhánh; `auto-pr.yml` tự mở PR vào `main`; repo tự xóa nhánh sau khi merge |
-| Lệnh tiện ích | Hoàn thành | `tasks.ps1` (up/down/shell/sql/ingest-zones/ingest/profile/dbt-*/qa/export-bi/build-map/prune-branches) |
+| Lệnh tiện ích | Hoàn thành | `tasks.ps1` (up/down/shell/sql/ingest-zones/ingest/e2e/e2e-direct/status/profile/dbt-*/qa/export-bi/build-map/prune-branches) |
 | Data modeling docs | Một phần | `docs/data_modeling/modeling.pdf` (giai đoạn 1: business event, 8 Dimension, Fact, measures, truy vấn kiểm chứng Star Schema); sơ đồ Star Schema chỉ có qua link Google Drive trong PDF |
 | OLAP mart | **Hoàn thành, chạy trên DuckDB** | 5 mart trong schema `olap` (`mart_trips_daily`, `mart_hourly_activity`, `mart_routes_monthly`, `mart_trip_profile`, `mart_monthly_kpi`) phục vụ A1–A8, B1–B5 của modeling.pdf; tổng khớp Fact. Hướng dẫn: [guides/olap.md](guides/olap.md) |
-| Pipeline ELT end-to-end | **Chưa có** | Cần pipeline Mage: ingest → `dbt build` |
-| Power BI | **Đã dựng 7 trang, số liệu khớp; còn sửa hiển thị** | `.\tasks.ps1 export-bi` xuất 5 mart + 7 Dimension ra `data/bi/*.parquet`; `powerbi/queries/*.pq` (Power Query), `powerbi/dax/measures.dax` (119 measure), `powerbi/map_shapes/` (TopoJSON 263 zone + tâm khu vực); hướng dẫn dựng model và 7 trang: [guides/powerbi.md](guides/powerbi.md). Template `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (không chứa dữ liệu); `.pbix` có dữ liệu chỉ giữ ở máy |
+| Pipeline ELT end-to-end | **Hoàn thành, đã chạy, có lịch và cảnh báo** | Pipeline Mage `nyc_taxi_e2e`: Zone Lookup → chuyến đi (bỏ qua tháng đã nạp, nạp lại file TLC đã phát hành lại) → `dbt build` → QA → xuất Parquet Power BI; trigger `monthly_e2e` 03:00 ngày 2 hằng tháng (giờ VN) và `manual_e2e` (`.\tasks.ps1 e2e`); retry, timeout 2 giờ, cảnh báo khi lỗi (file + webhook tùy chọn), `.\tasks.ps1 status`. Hướng dẫn: [guides/pipeline.md](guides/pipeline.md) |
+| Power BI | **Hoàn thành: 7 trang, số liệu khớp** | `.\tasks.ps1 export-bi` xuất 5 mart + 7 Dimension ra `data/bi/*.parquet`; `powerbi/queries/*.pq` (Power Query), `powerbi/dax/measures.dax` (119 measure), `powerbi/map_shapes/` (TopoJSON 263 zone + tâm khu vực); hướng dẫn dựng model và 7 trang: [guides/powerbi.md](guides/powerbi.md). Template `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (không chứa dữ liệu); `.pbix` có dữ liệu chỉ giữ ở máy; card "Data as of" (bảng `DataFreshness`) ở góc trên bên phải mỗi trang |
 
 ## 3. Chi tiết phần đã làm
 
@@ -76,7 +76,7 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 10. `is_total_mismatch` dựa trên quy luật quan sát từ dữ liệu (`extra` đã gồm phụ phí ở nhiều dòng), không phải định nghĩa chính thức của TLC; còn 384.360 dòng lệch thật (0,43%) chưa phân tích nguyên nhân.
 9. DuckDB không tự thu hồi chỗ của dòng đã xóa khi nạp lại một file; nạp lại nhiều lần làm file phình. Thu gọn bằng `COPY FROM DATABASE` sang file mới khi cần.
 7. `data/reference/taxi_zones.zip` (nhị phân) vẫn nằm trong git; nay là nguồn của `powerbi/map_shapes/` (`tasks.ps1 build-map`) nên giữ lại.
-13. Báo cáo Power BI đã dựng đủ 7 trang (template `.pbit`); số liệu đã đối chiếu và khớp (21/11/2026); phần lớn lỗi hiển thị đã sửa. Còn lại: waterfall trang 7 vẫn tắt trục X (không có tên khoản dưới cột). Heatmap trang 4 (đủ 7 ngày) chưa kiểm lại bằng ảnh chụp. Shape map là tính năng preview của Power BI.
+13. Báo cáo Power BI đã dựng đủ 7 trang (template `.pbit`); số liệu đã đối chiếu và khớp (21/11/2026). Người dùng xác nhận dashboard hoàn chỉnh, không sửa thêm. Shape map là tính năng preview của Power BI.
 
 ## 5. Cấu trúc thư mục hiện tại
 
@@ -102,11 +102,11 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 
 ## 6. Việc nên làm tiếp
 
-1. ~~Đối chiếu số liệu dashboard~~ (khớp, 21/11/2026); bật trục X của waterfall trang 7 (lỗi đã biết số 13); chụp ảnh dashboard (`powerbi/screenshots/`) và cập nhật README.
+1. ~~Đối chiếu số liệu và hoàn thiện dashboard~~: xong ngày 21/11/2026.
 2. Quyết định giữ hay bỏ `sql/warehouse/`; thống nhất `TripSK` cho Fact.
 3. Chuyển nội dung `modeling.pdf` thành markdown + ERD trong repo (sơ đồ hiện chỉ có qua link Google Drive) và bổ sung data dictionary.
 4. ~~Xây OLAP mart~~: xong ở bước 5.
-5. Pipeline Mage end-to-end: ingest → `dbt build`.
+5. ~~Pipeline Mage end-to-end~~: xong ngày 21/11/2026 (`nyc_taxi_e2e` + lịch hằng tháng). Tùy chọn tiếp: mở rộng phạm vi sang tháng 2026 trở đi (xem guides/pipeline.md, mục Lịch chạy).
 6. ~~Chuẩn bị dữ liệu Power BI, dựng dashboard~~: xong ở bước 6 (template `.pbit`); còn đối chiếu số liệu và ảnh chụp (việc 1).
 
 ## 7. Nhật ký thay đổi
@@ -215,6 +215,77 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 - **Kiểm tra:**
   - Số liệu đối chiếu tính bằng SQL trên `data/bi/` (mart giờ nối `dimdate`): 731 ngày (366 + 365); trung bình 117.298,6 / 110.443,6 / 124.172,3 lượt đón mỗi ngày.
   - Chưa chạy trong Power BI Desktop.
+
+### 24/11/2026 — Sửa pipeline theo review (schema drift, file nguồn đổi, cảnh báo, bảo mật)
+Review pipeline (skill de-pipeline-review) không thấy lỗi đang làm sai dữ liệu; 4 lỗi Major và 3 lỗi Minor được sửa như sau.
+- **Major: schema drift.**
+  - `load_trips_to_raw.py`, hàm `build_insert_sql`: file thiếu cột bắt buộc thì FAILED, không còn nạp NULL âm thầm.
+  - Chỉ `cbd_congestion_fee` được thiếu ở file trước 2025-01. Cột lạ in `[SCHEMA WARN]`.
+  - Lỗi đã tái hiện trước khi sửa: file giả đổi tên `tip_amount` → nạp 2/2 dòng với `tip_amount` NULL, vẫn SUCCESS.
+- **Major: file TLC phát hành lại.**
+  - Bảng mới `control.source_file_meta` (DDL `02_create_raw.sql`) lưu ETag, Content-Length, Last-Modified.
+  - Chế độ `ALL` gửi `HEAD` cho mỗi file đã SUCCESS; khác thì in `[SOURCE UPDATED]`, tải lại và nạp lại.
+  - Biến mới `check_source_updates` (mặc định true) và `force_download`.
+  - File nạp trước khi có cơ chế này: ghi mốc khi kích thước file local bằng Content-Length.
+- **Major: cảnh báo và retry.**
+  - Callback `mage/callbacks/notify_pipeline_failure.py` gắn vào cả 6 block. Khi một block lỗi (sau khi hết retry), `mage/utils/alerts.py` ghi `data/warehouse/alerts/pipeline_alerts.jsonl` và gửi `ALERT_WEBHOOK_URL` nếu có. Cùng block chỉ gửi một lần trong 60 phút.
+  - `retry_config` (2 lần, chờ từ 60 giây, tối đa 10 phút) cho 4 block nạp, dbt, xuất. QA không retry.
+  - Trigger thêm `timeout: 7200`, `timeout_status: failed`.
+  - Lệnh mới `.\tasks.ps1 status`: lần chạy thành công gần nhất (theo `_manifest.json`, cảnh báo nếu quá 35 ngày), 5 cảnh báo gần nhất, trạng thái container.
+  - Phát hiện khi kiểm thử: callback và retry của Mage chỉ chạy trong lượt chạy qua scheduler (`BlockExecutor`), không chạy với `mage run`. Vì vậy:
+    - thêm trigger API `manual_e2e`;
+    - script `mage/utils/trigger_run.py` tạo lượt chạy rồi đợi kết quả. Script phải gọi `set_repo_path` trước khi import tầng DB, nếu không Mage tạo một SQLite trống (đã gặp, đã xóa);
+    - `.\tasks.ps1 e2e` dùng script này; lệnh chạy thẳng cũ đổi tên thành `e2e-direct`.
+- **Major: bảo mật.**
+  - `docker-compose.yml` bind `127.0.0.1:6789` thay cho mọi giao diện mạng.
+  - Mật khẩu owner của Mage phải đổi trên giao diện (ghi trong `guides/pipeline.md`), tôi không làm thay được.
+- **Minor:**
+  - **Fact:**
+    - `pre_hook` xóa các `sourcefilename` không còn trong `raw`;
+    - nhóm cự ly tra theo khoảng nửa mở `[mốc dưới, mốc dưới kế tiếp)`, không còn khe hở `BETWEEN` (1.9999–2.0, 5.0–5.0001). Dimension giữ nguyên.
+  - **Card "Data as of" cho Power BI:** `powerbi/queries/DataFreshness.pq` + measure trong `guides/powerbi.md`.
+    - Người dùng đã thêm card vào cả 7 trang, ở góc trên bên phải (X 1024, Y 16, 240 × 36, chỗ trống ngang hàng tiêu đề), và xuất lại `.pbit`.
+    - Kiểm tra bằng cách đọc JSON trong `.pbit`: 7/7 trang có visual dùng `Data As Of` đúng vị trí; bảng `DataFreshness` đọc `RepoFolder & "\data\bi\_manifest.json"` (không ghi cứng đường dẫn máy), không có quan hệ; measure `Data As Of` nằm trong bảng đó.
+  - **Block QA:** kiểm tra `qa_suite` trước khi chạy. Trước đây `argparse` thoát mã 2, trùng mã "BLOCKED", nên tham số sai chỉ bị cảnh báo rồi bỏ qua.
+- **Hiệu năng:** bản đầu của join cự ly dùng `upper_bound IS NULL OR ...`, làm bước Fact incremental tăng từ ~1 s lên ~50 s vì DuckDB không đẩy được bộ lọc `batch_id` xuống trước join. Đã đo bằng SQL biên dịch: 24,6 s so với 0,0 s. Đổi mốc trên của nhóm cuối thành `1e12` thì bước Fact về 0,88 s (gồm cả `pre_hook`).
+- **Kiểm tra:**
+  - Schema drift trên file giả (4 trường hợp: đủ cột + cột lạ, đổi tên `tip_amount`, 2024 thiếu CBD, 2025 thiếu CBD) đều cho kết quả đúng; 24/24 file thật qua.
+  - `HEAD` lên TLC trả ETag và Content-Length khớp kích thước file local. Lượt đầu ghi mốc 24/24 file (`control.source_file_meta` 24 dòng, đủ ETag), lượt sau in "nguồn không đổi".
+  - Nhóm cự ly theo cách tra mới so với cách cũ trên 85.745.246 dòng hợp lệ: 0 dòng khác, 0 dòng Unknown.
+  - Webhook: HTTP server tạm trong container nhận 1 tin, tin thứ hai bị chặn vì trùng.
+  - Lượt chạy qua scheduler số 2 (`qa_suite` sai, cố ý lỗi): `run_quality_checks` failed, cảnh báo ghi `block: run_quality_checks`, `export_powerbi` bị hủy, lệnh trả mã 1.
+  - Lượt chạy qua scheduler số 3 (đầy đủ): completed sau 140 s; dbt PASS=98.
+  - `py_compile`, `docker compose config`, `dbt parse` đạt. Port chỉ còn `127.0.0.1:6789`.
+  - Hai dòng cảnh báo do các lượt thử tạo ra đã được xóa khỏi file cảnh báo.
+  - **Chưa kiểm chứng:**
+    - lượt tự động theo lịch đầu tiên (02/12/2026);
+    - lượt nạp lại thật khi TLC đổi file (chưa có file nào đổi);
+    - webhook thật của Slack/Discord/Teams.
+
+### 21/11/2026 — Pipeline end-to-end và lịch chạy (Mage)
+- **Pipeline mới** `mage/pipelines/nyc_taxi_e2e/`, 6 block chạy tuần tự:
+  1. `load_zone_lookup`, `export_zone_lookup`, `load_trips_to_raw`: dùng chung với hai pipeline ingestion cũ.
+  2. `custom/run_dbt_build.py`: gọi `/opt/dbt/bin/dbt build` bằng subprocess, vì dbt nằm trong venv riêng.
+  3. `custom/run_quality_checks.py`: chạy runner QA. Có FAIL thì dừng trước khi xuất; BLOCKED chỉ cảnh báo.
+  4. `custom/export_powerbi.py`: xuất Parquet cho Power BI.
+  - Helper `mage/utils/run_command.py` in output của lệnh ra log block theo từng dòng.
+  - Biến: `file_name` (mặc định `ALL`), `qa_suite` (`all`), `qa_large_scans` (`false`), `dbt_select`.
+- **Lịch** `mage/pipelines/nyc_taxi_e2e/triggers.yaml`:
+  - trigger `monthly_e2e`, cron `0 20 1 * *` theo UTC, tức 03:00 sáng ngày 2 hằng tháng giờ Việt Nam;
+  - `skip_if_previous_running: true` để không chạy chồng hai lượt;
+  - Mage đọc file khi server khởi động, đăng ký trigger (`last_enabled_at` 21/11/2026 03:56 UTC) và viết lại file theo định dạng của nó.
+- **`tasks.ps1`:**
+  - Lệnh mới `e2e` chạy pipeline và báo lỗi nếu mã thoát khác 0.
+  - Sửa `Invoke-MagePipeline`: khi output bị chuyển hướng, PowerShell 5.1 biến dòng WARNING mà Mage ghi ra stderr thành lỗi, và `$ErrorActionPreference = 'Stop'` làm script dừng ngay (lượt chạy đầu hỏng vì lỗi này). Nay tạm đặt `Continue` quanh lệnh docker.
+- **Hướng dẫn mới** `docs/guides/pipeline.md`; cập nhật `README.md` và `CLAUDE.md`.
+- **Power BI:** người dùng xác nhận dashboard hoàn chỉnh; trạng thái và lỗi đã biết số 13 cập nhật theo.
+- **Kiểm tra** (`.\tasks.ps1 e2e`, xuất log ra file, mã thoát 0, tổng 114 s):
+  - Zone Lookup: SUCCESS, 265 dòng.
+  - Chuyến đi: LSET = 2025-12; 24/24 tháng `[SKIP]` vì đã nạp.
+  - `dbt build`: PASS=98, ERROR=0, 90 s. Fact incremental không có batch mới; 5 mart build lại; test đối chiếu mart–Fact và Fact–staging đạt.
+  - QA suite `all`: PASS 49, FAIL 0, BLOCKED 0, NOT RUN 4, NOT APPLICABLE 1, 10 s. Log `run_20261121T040048Z`, không commit. 4 kiểm tra NOT RUN là kiểm tra quét toàn bảng, chỉ chạy khi `qa_large_scans=true`.
+  - Xuất Power BI: 12 bảng, 4 s.
+  - **Chưa kiểm chứng:** lượt chạy tự động đầu tiên theo lịch (02/12/2026 03:00).
 
 ### 21/11/2026 — Dọn tài liệu theo hướng repo cá nhân
 - **Yêu cầu của người dùng:** repo do một người phát triển, không giữ tên hay phân công của thành viên nhóm cũ.

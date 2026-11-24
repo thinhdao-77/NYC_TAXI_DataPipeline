@@ -36,14 +36,21 @@ Hoặc trên giao diện Mage (<http://localhost:6789>): mở pipeline, chỉnh 
 | `year` | `2024` | Chỉ xét một năm |
 | `start_month`, `end_month` | `2024-03` | Khoảng tháng |
 | `use_lset` | `true` | Bắt đầu từ LSET (tháng cuối của dãy tháng liên tục đã nạp thành công từ 2024-01) |
+| `check_source_updates` | `true` (mặc định) | Chế độ `ALL`: với file đã SUCCESS, gửi `HEAD` lên TLC, so ETag/kích thước với `control.source_file_meta`; khác thì tải và nạp lại |
+| `force_download` | `true` | Bỏ file Parquet local, tải lại từ TLC rồi mới nạp |
 
 ## Cách hoạt động
 
 1. **Tải file**: nếu `data/raw/<file>` chưa có thì tải vào `<file>.tmp`, đủ mới đổi tên; thử lại 3 lần (chờ 3s, 6s). HTTP 403/404 (tháng nguồn chưa phát hành) dừng ngay, không thử lại.
 2. **Nạp trong một transaction**: `DELETE` các dòng cũ của file đó, rồi `INSERT ... SELECT FROM read_parquet(...)`. Lỗi giữa chừng thì `ROLLBACK`, bảng giữ nguyên như trước. Vì vậy chạy lại một file không tạo dòng trùng.
-3. **Khớp cột theo tên, không phân biệt hoa thường** (`VendorID` → `vendor_id`, `Airport_fee` → `airport_fee`). Cột không có trong file (vd `cbd_congestion_fee` trước 2025) thành NULL.
-4. **Cột kiểm toán**: `source_file_name`, `source_row_number` (thứ tự dòng trong file, từ 1), `batch_id`, `load_datetime`.
-5. **Log**: mỗi file một dòng trong `control.etl_control` (`rows_read`, `rows_loaded`, `status`, `error_message`, thời gian).
+3. **Khớp cột theo tên, không phân biệt hoa thường** (`VendorID` → `vendor_id`, `Airport_fee` → `airport_fee`).
+   - **Kiểm tra schema drift:** file thiếu một cột bắt buộc thì lần nạp **FAILED**, log ghi danh sách cột hiện có, không nạp NULL âm thầm.
+   - Chỉ `cbd_congestion_fee` được phép thiếu ở các file trước 2025-01 (khi đó nạp NULL).
+   - Cột lạ trong file chỉ in `[SCHEMA WARN]`, không được nạp.
+   - Đã kiểm tra: 24 file thật đều qua. File giả đổi tên `tip_amount` thì bị chặn.
+4. **Phiên bản nguồn:** nạp thành công thì lưu ETag, Content-Length, Last-Modified của file trên TLC vào `control.source_file_meta`. Lượt `ALL` sau dùng các giá trị này để phát hiện TLC phát hành lại file.
+5. **Cột kiểm toán**: `source_file_name`, `source_row_number` (thứ tự dòng trong file, từ 1), `batch_id`, `load_datetime`.
+6. **Log**: mỗi file một dòng trong `control.etl_control` (`rows_read`, `rows_loaded`, `status`, `error_message`, thời gian).
 
 `batch_id` có dạng `YYYYMMDDHHMMSS` và luôn lớn hơn `batch_id` lớn nhất đã ghi trong log. Fact incremental dựa vào điều này.
 

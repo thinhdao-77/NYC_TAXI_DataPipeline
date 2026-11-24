@@ -2,15 +2,37 @@
 -- Incremental delete+insert theo file nguồn: lượt chạy sau chỉ lấy batch mới hơn batch lớn nhất
 -- đã có trong Fact; nếu một file được nạp lại (batch mới), toàn bộ dòng cũ của file đó bị xóa rồi
 -- chèn lại, nên Fact không bị trùng.
+-- delete+insert chỉ xóa file có mặt trong lô mới, nên pre_hook dọn thêm các file đã bị xóa khỏi raw.
+-- So với raw (~0,5 s) thay vì staging is_valid_for_fact (~49 s cho DELETE ... NOT IN trên view).
+-- Trường hợp hiếm còn lại (nạp lại một file mà mọi dòng đều không hợp lệ) do test
+-- assert_fact_matches_staging chặn: sửa bằng `dbt build --full-refresh -s fact_taxi_trips`.
 {{
     config(
         materialized='incremental',
         incremental_strategy='delete+insert',
         unique_key='sourcefilename',
         schema='dds',
-        alias='facttaxitrip'
+        alias='facttaxitrip',
+        pre_hook="{% if is_incremental() %}
+            delete from {{ this }} where sourcefilename not in (
+                select distinct source_file_name from {{ source('raw', 'yellow_tripdata') }})
+            {% endif %}"
     )
 }}
+
+-- Nhóm cự ly tra theo khoảng nửa mở [mốc dưới, mốc dưới của nhóm kế tiếp): không còn khe hở giữa
+-- các nhóm như khi dùng BETWEEN min/max (1.9999 -> 2.0000, 5.0000 -> 5.0001). Kết quả giữ nguyên
+-- với dữ liệu 2 chữ số thập phân (2.00 thuộc 2-5 miles, 5.00 thuộc 2-5 miles, 5.01 thuộc Over 5).
+-- Mốc trên của nhóm cuối là 1e12 thay cho NULL: điều kiện `OR upper_bound IS NULL` làm DuckDB
+-- không đẩy được bộ lọc incremental xuống trước join (bước Fact từ ~1 s lên ~50 s).
+WITH distance_bounds AS (
+    SELECT
+        distancegroupsk,
+        mindistance AS lower_bound,
+        COALESCE(LEAD(mindistance) OVER (ORDER BY mindistance), 1e12) AS upper_bound
+    FROM {{ ref('dim_distance_group') }}
+    WHERE distancegroupsk > 0
+)
 
 SELECT
     COALESCE(d_pu.datesk, -1)                  AS pickupdatesk,
@@ -85,8 +107,9 @@ LEFT JOIN {{ ref('dim_rate_code') }} r
 LEFT JOIN {{ ref('dim_passenger_group') }} pg 
     ON COALESCE(stg.passenger_count, 0) BETWEEN pg.minpassengers AND pg.maxpassengers
 
-LEFT JOIN {{ ref('dim_distance_group') }} dg 
-    ON stg.trip_distance BETWEEN dg.mindistance AND dg.maxdistance
+LEFT JOIN distance_bounds dg
+    ON stg.trip_distance >= dg.lower_bound
+   AND stg.trip_distance < dg.upper_bound
 
 -- Điều kiện giữ dòng định nghĩa một chỗ trong staging (stg_yellow_taxi_trips.is_valid_for_fact).
 WHERE stg.is_valid_for_fact
