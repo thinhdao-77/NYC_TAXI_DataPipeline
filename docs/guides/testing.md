@@ -7,8 +7,6 @@ Dự án có hai lớp kiểm thử bổ sung cho nhau:
 | **dbt test** | `.\tasks.ps1 dbt-build` / `dbt-test` | Mỗi lần build model | Gắn với từng model (schema test + singular test trong `dbt/tests/`); build lỗi thì dừng |
 | **Runner QA** | `.\tasks.ps1 qa [suite]` | Sau khi pipeline chạy xong, trước khi dùng dữ liệu (Power BI) | Độc lập với dbt, chỉ đọc, kiểm tra xuyên tầng `raw → stage → dds → olap`, xuất báo cáo JSON + Markdown |
 
-> Bản cũ của tài liệu này mô tả runner trên PostgreSQL (`psql`, `psycopg2`). Từ 18/11/2026 runner chạy trên DuckDB; bản cũ còn trong lịch sử git.
-
 ## Runner QA (`tests/run_quality_tests.py`)
 
 Chạy trong container Mage (có sẵn thư viện `duckdb` 1.5.x, cùng phiên bản với file dữ liệu):
@@ -33,7 +31,7 @@ Mỗi lượt chạy ghi `docs/test_plans_and_logs/runs/run_<thời điểm UTC>
 | Mã | Tầng | Kiểm tra | Quét lớn |
 |---|---|---|:---:|
 | `PF-REPO-01` | Preflight | Đủ file DDL, pipeline Mage, project dbt, Zone CSV | |
-| `PF-ENGINE-01` | Preflight | `docker-compose.yml` cấu hình DuckDB, không còn PostgreSQL | |
+| `PF-ENGINE-01` | Preflight | `docker-compose.yml` cấu hình `DUCKDB_PATH`, không có service database riêng | |
 | `PF-COMPOSE-01` | Preflight | `docker compose config` hợp lệ (chỉ khi chạy trên host) | |
 | `PF-DB-DRIVER/CONNECT/READONLY` | Preflight | duckdb 1.5.x; mở được file; lệnh ghi bị từ chối | |
 | `SM-<bảng>` | Smoke | 12 bảng/view (`raw`, `control`, `stage`, `snapshots`, `dds.facttaxitrip`, 5 mart) tồn tại, có dữ liệu | |
@@ -63,7 +61,7 @@ Một tầng chỉ chạy deep khi các bảng của nó (và tầng phụ thu�
 
 - `.\tasks.ps1 qa full`: **53 PASS, 0 FAIL, 1 NOT APPLICABLE** (`PF-COMPOSE-01` trong container), ~32 s. Kiểm tra lâu nhất: `STG-VAL-01` ~15 s.
 - **Kiểm thử âm tính:** bản sao chỉ có 2 tháng, cố ý nạp trùng 10 dòng file 2024-01 và xóa 1 dòng file 2024-02 → `RAW-DUP-01` FAIL đúng 2 file, `RAW-REC-03` FAIL, mã thoát 1. (`RAW-CMP-01` cũng FAIL vì bảng thử tạo bằng `CREATE TABLE AS` không giữ ràng buộc NOT NULL: đúng hành vi.)
-- Bản mẫu được commit: `docs/test_plans_and_logs/runs/run_20261118T115030Z.*`. Bản `run_20261026T034420Z.*` là bản mẫu cũ trên PostgreSQL.
+- Bản mẫu được commit: `docs/test_plans_and_logs/runs/run_20261118T115030Z.*`.
 
 ## dbt test
 
@@ -75,5 +73,3 @@ Một tầng chỉ chạy deep khi các bảng của nó (và tầng phụ thu�
 | OLAP | `models/olap_marts/schema.yml`, `tests/olap/` | NOT NULL, `accepted_values`, tháng KPI duy nhất, tổng mart khớp Fact |
 
 `dbt build` toàn bộ (18/11/2026): 98/98 PASS, ~3 phút 12 giây (gồm build lại Fact từ đầu).
-
-Kế hoạch kiểm thử và các phát hiện cũ: [test-plan.md](../test_plans_and_logs/test-plan.md) (viết cho giai đoạn PostgreSQL).

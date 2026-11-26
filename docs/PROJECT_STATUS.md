@@ -1,18 +1,18 @@
 # Tình trạng dự án NYC Yellow Taxi Data Warehouse
 
-> Cập nhật: 17/11/2026 — nhánh `main` của repo độc lập `thinhdao-77/NYC_TAXI_DataPipeline` (không còn là fork của repo nhóm).
+> Cập nhật: 26/11/2026 — nhánh `main` của repo `thinhdao-77/NYC_TAXI_DataPipeline`.
 > File này được cập nhật cùng mỗi thay đổi. Lịch sử ở [mục 7](#7-nhật-ký-thay-đổi).
 
 ## 1. Mục tiêu
 
 Xây dựng quy trình ELT và kho dữ liệu cho **NYC Yellow Taxi Trip Records 2024–2025**:
-Parquet nguồn → Mage ingestion → DuckDB (`raw`) → dbt staging → Dimension/Fact → OLAP mart → Power BI. Đang chuyển từ PostgreSQL sang DuckDB, xem [mục 8](#8-chuyển-sang-duckdb).
+Parquet nguồn → Mage ingestion → DuckDB (`raw`) → dbt staging → Dimension/Fact → OLAP mart → Power BI. Cơ chế nạp từng tầng và lưu ý vận hành DuckDB: [mục 8](#8-cơ-chế-nạp-và-vận-hành-duckdb).
 
 ## 2. Mức độ hoàn thành
 
 | Hạng mục | Trạng thái | Ghi chú |
 |---|---|---|
-| Hạ tầng Docker (Mage + DuckDB) | **Đã chuyển sang DuckDB, đã chạy thử** | Chỉ còn service `mage` (Mage 0.9.79 + duckdb 1.5.6; dbt 1.12 trong venv `/opt/dbt`); file DuckDB ở `data/warehouse/nyc_taxi.duckdb`. Xem [mục 8](#8-chuyển-sang-duckdb) |
+| Hạ tầng Docker (Mage + DuckDB) | **Hoàn thành, đang chạy** | Chỉ còn service `mage` (Mage 0.9.79 + duckdb 1.5.6; dbt 1.12 trong venv `/opt/dbt`); file DuckDB ở `data/warehouse/nyc_taxi.duckdb`. Xem [mục 8](#8-cơ-chế-nạp-và-vận-hành-duckdb) |
 | DDL ingestion (DuckDB) | **Hoàn thành, đã chạy** | `sql/ddl/`: schema `raw`, `control`; bảng `raw.yellow_tripdata`, `raw.taxi_zone_lookup`, `control.etl_control`. Block nạp tự chạy DDL (idempotent) |
 | Nạp Taxi Zone Lookup | **Hoàn thành (DuckDB), đã chạy** | Pipeline `ingest_zone_lookup` → `raw.taxi_zone_lookup` (265 dòng) |
 | Nạp Yellow Taxi Parquet | **Hoàn thành (DuckDB), đã nạp đủ 24 tháng** | Pipeline `ingest_yellow_trips` → `raw.yellow_tripdata` (89.892.322 dòng): tự tải file, retry, nạp mỗi file trong một transaction, LSET, log theo file |
@@ -20,10 +20,9 @@ Parquet nguồn → Mage ingestion → DuckDB (`raw`) → dbt staging → Dimens
 | Profiling dữ liệu nguồn | **Hoàn thành (DuckDB), đã chạy** | `sql/profiling/02..11` trên `raw.*`, mỗi file 3–14 s trên ~90 triệu dòng; chạy bằng `.\tasks.ps1 profile <file>` |
 | dbt project | **Chạy trên DuckDB** | `profiles.yml` dùng adapter `duckdb` (cùng file với Mage), `sources.yml` trỏ `raw.*`; dbt-core 1.12.7, dbt-duckdb 1.11.1 |
 | Dimension (8 bảng) | **Hoàn thành, chạy trên DuckDB** | `dbt/models/dds/dimensions/`; SK ổn định, dòng Unknown `-1`; `dim_location` là **SCD Type 2** từ snapshot `snapshots.snap_taxi_zone_lookup` (bước 5a) |
-| Fact `facttaxitrip` | **Hoàn thành, chạy trên DuckDB (24 tháng)** | `dbt/models/dds/facts/fact_taxi_trips.sql`: lọc `is_valid_for_fact`, incremental `delete+insert` theo `sourcefilename`; 85.745.246 dòng, build đầy đủ 94 s, 18 test PASS. Hướng dẫn: [guides/fact.md](guides/fact.md#0-chạy-trên-duckdb-dbt) |
-| SQL thủ công DDS | Lưu để tham khảo | `sql/warehouse/01..05` (Dimension idempotent + Fact + verify) |
+| Fact `facttaxitrip` | **Hoàn thành, chạy trên DuckDB (24 tháng)** | `dbt/models/dds/facts/fact_taxi_trips.sql`: lọc `is_valid_for_fact`, incremental `delete+insert` theo `sourcefilename`; 85.745.246 dòng, build đầy đủ 94 s, 18 test PASS. Hướng dẫn: [guides/fact.md](guides/fact.md#0-chạy-và-cơ-chế-nạp) |
 | Runner QA (DuckDB) | **Hoàn thành, đã chạy** | `tests/run_quality_tests.py` viết lại cho DuckDB (read_only), kiểm tra xuyên tầng raw → stage → dds → olap; `.\tasks.ps1 qa full`: 53 PASS, 0 FAIL, ~32 s. Hướng dẫn: [guides/testing.md](guides/testing.md) |
-| Test plan + log | Một phần | `docs/test_plans_and_logs/`: test plan viết cho giai đoạn PostgreSQL; bản chạy mẫu `run_20261118T115030Z` (DuckDB) và `run_20261026T034420Z` (PostgreSQL cũ) |
+| Log kiểm thử | Hoàn thành | Danh mục kiểm tra trong [guides/testing.md](guides/testing.md); bản chạy mẫu `docs/test_plans_and_logs/runs/run_20261118T115030Z.*`, log mới không commit |
 | CI / tự động hóa GitHub | **Hoàn thành, đã chạy thật trên GitHub** | `ci.yml` chạy khi push mọi nhánh; `auto-pr.yml` tự mở PR vào `main`; repo tự xóa nhánh sau khi merge |
 | Lệnh tiện ích | Hoàn thành | `tasks.ps1` (up/down/shell/sql/ingest-zones/ingest/e2e/e2e-direct/status/profile/dbt-*/qa/export-bi/build-map/prune-branches) |
 | Data modeling docs | Một phần | `docs/data_modeling/modeling.pdf` (giai đoạn 1: business event, 8 Dimension, Fact, measures, truy vấn kiểm chứng Star Schema); sơ đồ Star Schema chỉ có qua link Google Drive trong PDF |
@@ -39,7 +38,7 @@ Hướng dẫn: [docs/guides/ingestion.md](guides/ingestion.md).
 - Nạp bằng `INSERT ... SELECT FROM read_parquet(...)`, khớp cột theo tên không phân biệt hoa thường; mỗi file: `DELETE` dòng cũ + `INSERT` trong một transaction.
 - `batch_id` = `YYYYMMDDHHMMSS`, luôn lớn hơn giá trị lớn nhất trong log (`next_batch_id`).
 - Kết nối có retry khi file DuckDB bị tiến trình khác khóa (2, 4, 8, 16 s).
-- Số đo (16/11/2026): mỗi tháng ~3–3,5 triệu dòng, nạp một tháng (gồm tải ~50 MB) ~24 s; file DuckDB ~100 MB/tháng (336 MB sau 3 tháng, có 2 lần nạp lại). Trước đây trên PostgreSQL: ~20 GB cho 24 tháng.
+- Số đo (16/11/2026): mỗi tháng ~3–3,5 triệu dòng, nạp một tháng (gồm tải ~50 MB) ~24 s; file DuckDB ~100 MB/tháng (336 MB sau 3 tháng, có 2 lần nạp lại).
 
 ### 3.2 Dimension (dbt)
 
@@ -54,25 +53,21 @@ Hướng dẫn: [docs/guides/ingestion.md](guides/ingestion.md).
 | `dim_passenger_group` | `dds.dimpassengergroup` | 0..3 | tĩnh (NONE = 0/NULL hành khách, LARGE tới 9999) |
 | `dim_distance_group` | `dds.dimdistancegroup` | 1..3 | tĩnh, `NUMERIC(10,4)` |
 
-Logic nghiệp vụ giữ nguyên bản SQL đã sửa trong `feat/fact-thinh`. Khác biệt: SK không còn là `SERIAL` mà sinh từ khóa tự nhiên, để Fact incremental không bị lệch khóa khi Dimension build lại. Tên bảng/cột vật lý giữ nguyên, nên runner QA vẫn dùng được.
+SK sinh từ khóa tự nhiên (không dùng số tự tăng), để Fact incremental không bị lệch khóa khi Dimension build lại. Hướng dẫn: [guides/dimension.md](guides/dimension.md).
 
 ### 3.3 Fact (dbt)
 Grain: một chuyến đi hợp lệ (`stg.is_valid_for_fact`: `dropoff > pickup`, pickup trong 2024–2025, `fare/total/distance >= 0`). Tra khóa bằng `LEFT JOIN` + `COALESCE(sk, -1)`; Location tra theo khoảng hiệu lực SCD2. Incremental `delete+insert` theo `sourcefilename`, lấy batch mới hơn `max(batchid)`.
 
 ### 3.4 QA
-Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PASS, 0 FAIL, 1 NOT APPLICABLE. Lần chạy cũ 26/10 trên PostgreSQL (`run_20261026T034420Z`): 19 PASS, 8 FAIL, 14 BLOCKED (8 FAIL do bảng Dimension chưa tồn tại lúc test).
+Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PASS, 0 FAIL, 1 NOT APPLICABLE.
 
 ## 4. Vấn đề và rủi ro còn mở
 
-1. ~~Chưa chạy dbt trên database thật~~: toàn bộ pipeline dbt chạy trên DuckDB 24 tháng (bước 3–5), runner QA đạt.
-2. Hai cách build DDS cùng tồn tại (dbt và `sql/warehouse/`). Không được trộn: dbt build lại Dimension sẽ xóa khóa ngoại do `03_create_fact.sql` tạo. Nên chọn dbt làm chuẩn và cân nhắc bỏ bản SQL khi dbt đã ổn.
-3. Fact dbt không có `TripSK` (bản SQL có `BIGSERIAL`). Cần thống nhất nếu Power BI cần khóa chuyến đi.
+3. Fact không có khóa chuyến đi (`TripSK`); một chuyến được xác định bằng `sourcefilename` + `sourcerownumber`. Power BI hiện đọc mart nên chưa cần.
 4. ~~Dimension đọc `SELECT DISTINCT` từ bảng trips~~: đo trên DuckDB 0,6–1,6 s mỗi bảng, không cần tối ưu.
 12. SCD2 của `dim_location`: `validfrom` của phiên bản mới là **thời điểm chạy snapshot**, không phải ngày TLC đổi khu vực (nguồn không có ngày hiệu lực); phiên bản đầu tiên coi như áp dụng từ 1900-01-01. Vì dữ liệu chuyến đi là 2024–2025, mọi chuyến hiện tại đều trỏ phiên bản 1; phiên bản mới chỉ áp dụng cho chuyến có giờ đón sau lần snapshot phát hiện thay đổi. Chạy `dbt build --select fact_taxi_trips --full-refresh` không làm đổi phiên bản của chuyến cũ (tra theo thời điểm đón).
-5. ~~Fact bị trùng khi nạp lại một file cũ~~: đã sửa ở bước 4 (`delete+insert` theo `sourcefilename`, kiểm chứng bằng cách nạp lại file 2024-01). Còn lại: file bị xóa hẳn khỏi `raw` thì dòng Fact cũ không tự mất (test `assert_fact_matches_staging` báo; chạy `--full-refresh`).
+5. ~~Fact bị trùng khi nạp lại một file cũ~~: đã sửa ở bước 4 (`delete+insert` theo `sourcefilename`, kiểm chứng bằng cách nạp lại file 2024-01). File bị xóa hẳn khỏi `raw`: `pre_hook` của Fact xóa dòng tương ứng (24/11/2026).
 11. ~~Khóa `-1` trong Fact (nhóm hành khách 14,18 triệu dòng, ngày trả 759 dòng)~~: đã sửa ở bước 4 (nhóm `NONE`, `DimDate` tới 2026-01-31). Lưu ý: `DimDate` có tháng 01/2026 nhưng không có chuyến đón nào trong tháng đó.
-6. Mage lưu lịch sử chạy theo uuid pipeline. Sau khi đổi tên (`letter_01_...` → `ingest_zone_lookup`, `ingest_trips_to_postgres` → `ingest_yellow_trips`), lịch sử cũ trên Mage UI không hiện dưới tên mới. LSET không bị ảnh hưởng vì `control.etl_control` trên DuckDB bắt đầu mới.
-8. ~~`sources.yml` trỏ bảng PostgreSQL cũ~~: đã xử lý ở bước 3 (`sources.yml` trỏ `raw.*`, DDS đọc staging qua `ref()`).
 10. `is_total_mismatch` dựa trên quy luật quan sát từ dữ liệu (`extra` đã gồm phụ phí ở nhiều dòng), không phải định nghĩa chính thức của TLC; còn 384.360 dòng lệch thật (0,43%) chưa phân tích nguyên nhân.
 9. DuckDB không tự thu hồi chỗ của dòng đã xóa khi nạp lại một file; nạp lại nhiều lần làm file phình. Thu gọn bằng `COPY FROM DATABASE` sang file mới khi cần.
 7. `data/reference/taxi_zones.zip` (nhị phân) vẫn nằm trong git; nay là nguồn của `powerbi/map_shapes/` (`tasks.ps1 build-map`) nên giữ lại.
@@ -85,16 +80,15 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 ├── .github/workflows/ci.yml
 ├── data/{raw,reference,warehouse}, download_raw.ps1
 ├── dbt/                      # transform chính: sources → staging → snapshots → dds (dims, facts) → olap_marts; macros/olap_trip_measures.sql
-├── mage/                     # ingestion: pipelines ingest_zone_lookup, ingest_yellow_trips; utils/duckdb_helpers.py
+├── mage/                     # pipelines ingest_zone_lookup, ingest_yellow_trips, nyc_taxi_e2e; custom/, callbacks/, utils/
 ├── sql/
 │   ├── ddl/                  # DDL DuckDB (raw, control); block ingestion tự chạy
-│   ├── profiling/            # truy vấn kiểm tra dữ liệu nguồn
-│   └── warehouse/            # SQL thủ công Dimension/Fact (tham khảo)
+│   └── profiling/            # truy vấn kiểm tra dữ liệu nguồn
 ├── tests/                    # runner QA chỉ đọc
 ├── powerbi/                  # scripts/ (export_bi, build_map_shapes), queries/ (M), dax/measures.dax, map_shapes/
 ├── docs/
 │   ├── PROJECT_STATUS.md     # file này
-│   ├── guides/               # ingestion, staging, dimension, fact, olap, testing, powerbi
+│   ├── guides/               # ingestion, staging, dimension, fact, olap, testing, pipeline, powerbi
 │   ├── data_modeling/
 │   └── test_plans_and_logs/
 ├── docker-compose.yml, Dockerfile, requirements.txt, requirements-dbt.txt, tasks.ps1, .env.example, README.md, CLAUDE.md
@@ -103,7 +97,7 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 ## 6. Việc nên làm tiếp
 
 1. ~~Đối chiếu số liệu và hoàn thiện dashboard~~: xong ngày 21/11/2026.
-2. Quyết định giữ hay bỏ `sql/warehouse/`; thống nhất `TripSK` cho Fact.
+2. ~~Xóa `sql/warehouse/`~~: đã xóa ngày 26/11/2026.
 3. Chuyển nội dung `modeling.pdf` thành markdown + ERD trong repo (sơ đồ hiện chỉ có qua link Google Drive) và bổ sung data dictionary.
 4. ~~Xây OLAP mart~~: xong ở bước 5.
 5. ~~Pipeline Mage end-to-end~~: xong ngày 21/11/2026 (`nyc_taxi_e2e` + lịch hằng tháng). Tùy chọn tiếp: mở rộng phạm vi sang tháng 2026 trở đi (xem guides/pipeline.md, mục Lịch chạy).
@@ -215,6 +209,18 @@ Lần chạy 18/11/2026 trên DuckDB (`run_20261118T115030Z`, `qa full`): 53 PAS
 - **Kiểm tra:**
   - Số liệu đối chiếu tính bằng SQL trên `data/bi/` (mart giờ nối `dimdate`): 731 ngày (366 + 365); trung bình 117.298,6 / 110.443,6 / 124.172,3 lượt đón mỗi ngày.
   - Chưa chạy trong Power BI Desktop.
+
+### 26/11/2026 — Rà tài liệu: chỉ giữ hướng dẫn cho công nghệ hiện tại
+Theo yêu cầu người dùng, bỏ mọi hướng dẫn và ghi chú cho công nghệ không còn dùng (PostgreSQL, `psql`, bản SQL thủ công `sql/warehouse/`). Nhật ký thay đổi (mục 7) giữ nguyên vì là lịch sử.
+- **`README.md`:** viết lại theo stack hiện tại: kiến trúc Mage → DuckDB → dbt → Parquet → Power BI, bảng công nghệ có phiên bản, kết quả chính, bắt đầu nhanh bằng `.\tasks.ps1 up` / `e2e` / `status`, bảng lệnh, bảng tài liệu theo bước, cấu trúc repo. Bỏ phần PostgreSQL Staging, biến `POSTGRES_*`, lệnh `psql`, volume `pgdata`, pipeline `ingest_trips_to_postgres`, các dòng "chưa triển khai".
+- **`guides/dimension.md`:** viết lại: bảng 8 Dimension, nhóm tĩnh, hai lớp Unknown, SCD2, kết quả. Bỏ mục sửa DDL PostgreSQL (`CREATE TABLE IF NOT EXISTS`, `ON CONFLICT`) và mục chạy bằng `psql`. Ghi rõ Fact tra nhóm cự ly theo khoảng nửa mở.
+- **`guides/fact.md`:** bỏ mục 3 (nạp gia tăng bằng `psql`), mục 5 (số liệu PostgreSQL 2 tháng), mục 6 (DAX trên Fact, trong khi Power BI đọc mart); thêm mục ngắn "Dùng Fact cho báo cáo". Cập nhật giới hạn file bị xóa khỏi `raw` (đã có `pre_hook`) và lý do mốc `1e12` của nhóm cự ly.
+- **`guides/staging.md`, `guides/testing.md`:** bỏ các ghi chú "bản cũ trên PostgreSQL"; mô tả `PF-ENGINE-01` không còn nhắc PostgreSQL.
+- **Xóa** `docs/test_plans_and_logs/test-plan.md` (viết cho PostgreSQL; danh mục kiểm tra hiện tại nằm trong `guides/testing.md`) và bản chạy mẫu `run_20261026T034420Z.*` (PostgreSQL); bỏ ngoại lệ tương ứng trong `.gitignore`.
+- **PROJECT_STATUS:** mục 1–6 bỏ phần "đang chuyển sang DuckDB", dòng SQL thủ công, kết quả QA PostgreSQL, rủi ro 1/2/6/8 (đã hết hoặc thuộc PostgreSQL); mục 8 đổi thành "Cơ chế nạp và vận hành DuckDB" (bỏ bảng các bước chuyển đổi). `CLAUDE.md` sửa theo.
+- `docker-compose.yml`: chỉ sửa chú thích giới hạn RAM (không còn nhắc Postgres).
+- **Theo yêu cầu người dùng, xóa `sql/warehouse/`** (`01_create_dimensions.sql` … `05_verify_fact.sql`, SQL thủ công cho PostgreSQL, không chạy trên DuckDB). Không file code, CI hay test nào tham chiếu thư mục này. Bản cũ còn trong lịch sử git.
+- **Kiểm tra:** tìm `postgres|psql|psycopg|pgdata|5432|test-plan|20261026` trong README, CLAUDE.md, `docs/guides/`: không còn kết quả; tìm `sql/warehouse` ngoài nhật ký: không còn; mọi liên kết tương đối trong README, CLAUDE.md, PROJECT_STATUS và `docs/guides/*.md` trỏ tới file có thật; anchor `fact.md#0-chạy-và-cơ-chế-nạp` cập nhật ở PROJECT_STATUS; `docker compose config` hợp lệ.
 
 ### 24/11/2026 — Sửa pipeline theo review (schema drift, file nguồn đổi, cảnh báo, bảo mật)
 Review pipeline (skill de-pipeline-review) không thấy lỗi đang làm sai dữ liệu; 4 lỗi Major và 3 lỗi Minor được sửa như sau.
@@ -597,20 +603,11 @@ Review pipeline (skill de-pipeline-review) không thấy lỗi đang làm sai d�
 ### 16/11/2026 — Khởi tạo
 - Fork repo, cấu hình remote `origin` (fork) và `upstream` (repo gốc, chặn push). Viết bản tóm tắt đầu tiên.
 
-## 8. Chuyển sang DuckDB
+## 8. Cơ chế nạp và vận hành DuckDB
 
-Quyết định ngày 16/11/2026: thay PostgreSQL bằng DuckDB làm kho dữ liệu, làm lần lượt theo thứ tự pipeline. Fork sẽ khác repo nhóm (vẫn dùng PostgreSQL) ở các phần ingestion, staging, test.
+Dự án dùng DuckDB làm kho dữ liệu từ 16/11/2026 (trước đó là PostgreSQL; quá trình chuyển ghi trong nhật ký mục 7).
 
-| Bước | Phạm vi | Trạng thái |
-|---|---|---|
-| 1. Hạ tầng | `docker-compose.yml`, `Dockerfile`, `.env.example`, `requirements*.txt`, `tasks.ps1` | **Xong, đã chạy thử trên Docker** |
-| 2. Source → Ingestion | Mage: tải Parquet + Zone Lookup vào `raw.*`, log nạp (`control.etl_control`) và LSET trên DuckDB; `sql/ddl`; `mage/io_config.yaml` | **Xong, đã chạy thử 3 tháng** |
-| 3. Staging | `profiles.yml` sang dbt-duckdb (bỏ `dbt-postgres`); `sources.yml` trỏ `raw`; model staging (schema `stage`): đặt tên, cột dẫn xuất, cờ dữ liệu lỗi; DDS đọc staging bằng `ref()`; `sql/profiling` chạy trên DuckDB | **Xong, đã chạy trên 24 tháng** |
-| 4. ETL/ELT | Sửa hàm riêng PostgreSQL trong `dim_date`/`dim_time` (`to_char` → `strftime`, `generate_series` → `range`); Fact lọc bằng `is_valid_for_fact`; Fact `delete+insert` theo `sourcefilename` (4a); test `assert_fact_matches_staging` | **Xong, đã chạy trên 24 tháng** |
-| 5. Data warehouse | 5 OLAP mart (schema `olap`) + test đối chiếu Fact; runner QA viết lại cho `duckdb`; SCD Type 2 cho `dim_location` bằng `dbt snapshot` (5a) | **Xong, đã chạy trên 24 tháng** |
-| 6. Power BI | Xuất mart ra Parquet (người dùng chọn thay cho ODBC); file M, DAX, bản đồ và hướng dẫn (người dùng chọn thay cho dựng sẵn `.pbip`) | **Phần chuẩn bị xong**; dựng `.pbix` do người dùng làm |
-
-### Cơ chế nạp và lịch sử dữ liệu (quyết định 17/11/2026)
+### Cơ chế nạp từng tầng (quyết định 17/11/2026)
 
 Nguồn TLC là file Parquet theo tháng, không có log giao dịch, nên **không dùng CDC**. Cơ chế cho từng tầng:
 
@@ -621,10 +618,6 @@ Nguồn TLC là file Parquet theo tháng, không có log giao dịch, nên **kh�
 | Dimension danh mục (`vendor`, `payment_type`, `rate_code`, `date`, `time`, nhóm tĩnh) | Full refresh = SCD Type 1 | Giữ nguyên |
 | `fact_taxi_trips` | **4a.** Đổi từ append theo `batch_id` sang `delete+insert`: chọn các `source_file_name` có `batch_id` mới hơn lần nạp Fact trước, xóa các chuyến đi của những file đó trong Fact rồi chèn lại. Mục tiêu: nạp lại một tháng ở `raw` không làm trùng Fact | **Xong (bước 4)** |
 | `dim_location` | **5a (tùy chọn).** `dbt snapshot` (SCD Type 2, `strategy: check` trên `borough`, `zone`, `service_zone`) từ `raw.taxi_zone_lookup`; `dim_location` có `valid_from`, `valid_to`, `is_current`, SK riêng mỗi phiên bản; Fact tra khóa theo `pickup_datetime` nằm trong khoảng hiệu lực. Giá trị thực tế thấp (khu vực hiếm đổi), chủ yếu để minh họa SCD2 | **Xong (bước 5)**: SK = `LocationID*100 + VersionNo`, phiên bản đầu từ 1900-01-01 |
-
-Kiểm thử cần có khi làm: 4a — nạp lại một tháng ở `raw`, chạy lại Fact, số dòng Fact của tháng đó không đổi; 5a — sửa thử một khu vực trong bản sao CSV, chạy snapshot, có 2 phiên bản và Fact cũ vẫn trỏ phiên bản cũ.
-
-**Tạm thời không chạy được cho tới bước tương ứng:** hướng dẫn PostgreSQL còn sót trong README (mục cũ) và các phần "bản cũ, tham khảo" trong `docs/guides/`.
 
 **Lưu ý vận hành DuckDB**
 - Chỉ một tiến trình được ghi vào file. Không chạy đồng thời pipeline Mage và `dbt build`; đóng Power BI/DBeaver trước khi ghi.
