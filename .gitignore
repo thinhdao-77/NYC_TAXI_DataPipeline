@@ -13,7 +13,6 @@ powerbi/**/*.pbix
 
 # Log kiểm thử sinh tự động (giữ một lần chạy mẫu đã được commit)
 docs/test_plans_and_logs/runs/*
-!docs/test_plans_and_logs/runs/run_20261026T034420Z.*
 !docs/test_plans_and_logs/runs/run_20261118T115030Z.*
 
 # Môi trường

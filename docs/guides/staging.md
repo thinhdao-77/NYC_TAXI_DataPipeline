@@ -2,8 +2,6 @@
 
 Tầng staging nằm giữa dữ liệu thô do Mage nạp (schema `raw`, xem [ingestion.md](ingestion.md)) và kho dữ liệu DDS (Dimension/Fact). Nhiệm vụ: đặt tên và kiểu dữ liệu thống nhất, tính các cột dẫn xuất, **gắn cờ** dữ liệu lỗi. Staging **không lọc dòng**: việc giữ hay bỏ một chuyến đi do tầng DDS quyết định, dựa trên các cờ ở đây.
 
-> Bản cũ của tài liệu này mô tả Staging trên PostgreSQL (bảng `stage.stg_*` do Mage nạp). Từ 16/11/2026 dự án dùng DuckDB; xem lịch sử git nếu cần bản cũ.
-
 ## Các model
 
 | Model dbt | Đối tượng trong DuckDB | Nguồn | Kiểu |
@@ -108,8 +106,6 @@ Các truy vấn đo lỗi trên `raw.yellow_tripdata` / `raw.taxi_zone_lookup`. 
 | `09_profile_followup.sql` | File có dòng đón ngoài kỳ; top 5 giờ "trả trước đón" ở 11/2024, 11/2025 | 3 s |
 | `10_profile_duplicates.sql` | Nhóm dòng trùng hoàn toàn trong **một file** (đổi tên file ở dòng `SET VARIABLE f = ...`) | 4 s |
 | `11_profile_consistency.sql` | Tổng tiền so với các khoản thành phần; thống kê và tên trùng của Zone Lookup | 4 s |
-
-Trên PostgreSQL trước đây, mỗi file quét toàn bảng mất vài phút.
 
 ## Lưu ý
 

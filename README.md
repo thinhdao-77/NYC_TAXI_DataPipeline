@@ -1,304 +1,137 @@
 # NYC Yellow Taxi Data Warehouse
 
-> **Đang chuyển từ PostgreSQL sang DuckDB (từ 16/11/2026).** Đã xong bước 1 (Docker Compose, không còn PostgreSQL), bước 2 (ingestion vào DuckDB, xem [docs/guides/ingestion.md](docs/guides/ingestion.md)) bước 3 (staging bằng dbt-duckdb, xem [docs/guides/staging.md](docs/guides/staging.md)) bước 4 (Dimension/Fact trên DuckDB, xem [docs/guides/fact.md](docs/guides/fact.md#0-chạy-trên-duckdb-dbt)) bước 5 (OLAP mart, SCD2 cho `dim_location`, runner QA trên DuckDB, xem [docs/guides/olap.md](docs/guides/olap.md) và [docs/guides/testing.md](docs/guides/testing.md)) và phần chuẩn bị bước 6 (xuất Parquet, truy vấn M, measure DAX, bản đồ cho Power BI, xem [docs/guides/powerbi.md](docs/guides/powerbi.md)). Các hướng dẫn PostgreSQL bên dưới sẽ được viết lại theo từng bước; tiến độ xem [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md#8-chuyển-sang-duckdb).
+Kho dữ liệu và dashboard cho **NYC Yellow Taxi Trip Records 2024–2025** (24 file Parquet, khoảng 90 triệu chuyến đi). Dữ liệu đi qua một pipeline ELT chạy theo lịch: Mage nạp file nguồn vào DuckDB, dbt dựng Staging, Dimension/Fact (Star Schema) và OLAP mart, cuối cùng Power BI đọc mart đã xuất ra Parquet.
 
-Dự án xây dựng quy trình xử lý và phân tích dữ liệu **NYC Yellow Taxi Trip Records** cho giai đoạn 2024–2025. Repo hiện có: nạp dữ liệu nguồn vào PostgreSQL Staging bằng Mage.ai, và tầng DDS (8 Dimension + Fact) build bằng dbt. OLAP mart, Power BI và pipeline ELT end-to-end đang phát triển tiếp. Tình trạng chi tiết: [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
-
-## Trạng thái dự án
-
-| Hạng mục | Trạng thái hiện tại |
-|---|---|
-| PostgreSQL Staging | Có DDL tạo schema, bảng chuyến đi, bảng Zone Lookup và bảng log ETL |
-| Nạp dữ liệu bằng Mage.ai | Có pipeline nạp Taxi Zone Lookup và Yellow Taxi Parquet; pipeline chuyến đi hỗ trợ tải file, retry, nạp theo batch và chạy lại |
-| Docker Compose | Có cấu hình chạy PostgreSQL và Mage.ai |
-| Dimension DDS | 8 model dbt trong `dbt/models/dds/dimensions/` (bản SQL thủ công tham khảo ở `sql/warehouse/`) |
-| Fact DDS | Model dbt incremental `dbt/models/dds/facts/fact_taxi_trips.sql` |
-| dbt | Có `dbt_project.yml`, `profiles.yml`, sources, test schema; `dbt parse` chạy được. Chưa chạy trên dữ liệu đầy đủ |
-| OLAP | Chưa có mart trong `dbt/models/olap_marts/` |
-| End-to-end ELT | Pipeline Mage `nyc_taxi_e2e` (Zone Lookup → chuyến đi → `dbt build` → QA → Parquet Power BI), lịch hằng tháng; chạy tay `.\tasks.ps1 e2e`. Hướng dẫn: [docs/guides/pipeline.md](docs/guides/pipeline.md) |
-| CI | GitHub Actions: kiểm tra cú pháp Python, `docker compose config`, `dbt parse` |
-| Power BI | Dashboard 7 trang, template `powerbi/dashboard/NYC_Taxi_Dashboard.pbit` (đọc Parquet từ `.\tasks.ps1 export-bi`); hướng dẫn: [docs/guides/powerbi.md](docs/guides/powerbi.md) |
-
-> README này mô tả trạng thái của repo hiện tại. Các mô hình Dimension, Fact, truy vấn OLAP và dashboard là mục tiêu phát triển tiếp, không phải chức năng đã triển khai đầy đủ.
+Tình trạng chi tiết và nhật ký thay đổi: [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
 ## Kiến trúc
 
 ```text
-NYC Taxi source files
-        │
+TLC Parquet (theo tháng) + Taxi Zone Lookup (CSV)
+        │  Mage: tải file, kiểm tra schema, nạp mỗi file trong một transaction
         ▼
-Mage.ai ingestion
-        │
+DuckDB  raw.yellow_tripdata, raw.taxi_zone_lookup, control.etl_control
+        │  dbt (dbt-duckdb)
+        ├─► stage.*        view: đặt tên, cột dẫn xuất, cờ chất lượng is_*
+        ├─► snapshots.*    SCD Type 2 cho Taxi Zone
+        ├─► dds.dim* (8) + dds.facttaxitrip      Star Schema, Fact incremental
+        └─► olap.mart_* (5)                       mart tổng hợp cho báo cáo
+        │  export_bi.py
         ▼
-PostgreSQL: stage / control
-        │
-        ├── stage.stg_yellow_taxi_trips
-        ├── stage.stg_taxi_zone_lookup
-        └── control.etl_control
-        │
-        ▼
-dbt: dds.dim* (8 Dimension) → dds.facttaxitrip
-        │
-        ▼
-OLAP mart / Power BI (kế hoạch phát triển)
+data/bi/*.parquet  ──►  Power BI (dashboard 7 trang)
 ```
+
+Toàn bộ chuỗi trên là pipeline Mage `nyc_taxi_e2e`, chạy tự động 03:00 ngày 2 hằng tháng (giờ VN), có retry, timeout và cảnh báo khi lỗi.
 
 | Thành phần | Công nghệ | Vai trò |
 |---|---|---|
-| Dữ liệu chuyến đi | Parquet | Yellow Taxi Trip Records theo tháng, 2024–2025 |
-| Dữ liệu tham chiếu | CSV, ZIP | Taxi Zone Lookup và ranh giới Taxi Zone |
-| Orchestration / ingestion | Mage.ai, Python, PyArrow | Đọc, tải và nạp dữ liệu vào PostgreSQL |
-| Staging / control | PostgreSQL | Lưu dữ liệu nguồn và lịch sử các lần nạp |
-| Transformation / analytics | dbt, PostgreSQL | Build Dimension và Fact (DDS); dự kiến thêm mart OLAP |
-| Visualization | Power BI | Dự kiến xây dựng dashboard và bản đồ |
+| Orchestration, ingestion | Mage 0.9.79 (Docker) | Pipeline nạp dữ liệu và pipeline end-to-end theo lịch |
+| Kho dữ liệu | DuckDB 1.5 (một file `data/warehouse/nyc_taxi.duckdb`) | Lưu `raw`, `stage`, `dds`, `olap` |
+| Transform, test | dbt-core 1.12 + dbt-duckdb 1.11 (venv riêng `/opt/dbt` trong container) | Staging, snapshot SCD2, Dimension/Fact, OLAP mart, 98 test |
+| Kiểm tra chất lượng | `tests/run_quality_tests.py` (chỉ đọc) | Đối chiếu xuyên tầng `raw → stage → dds → olap` |
+| Báo cáo | Power BI Desktop | Đọc Parquet do pipeline xuất; template `.pbit` trong repo |
+| CI | GitHub Actions | Cú pháp Python, `docker compose config`, `dbt parse` |
+
+## Kết quả
+
+| Chỉ số | Giá trị |
+|---|---|
+| Dòng `raw` (24 tháng) | 89.892.322 |
+| Dòng Fact hợp lệ | 85.745.246 (95,39%) |
+| Khóa Unknown (`-1`) trong Fact | 0 |
+| `dbt build` | 98/98 PASS |
+| Runner QA `full` | 53 PASS, 0 FAIL |
+| Pipeline `nyc_taxi_e2e` khi không có tháng mới | khoảng 140 giây |
+
+## Yêu cầu
+
+- Windows với PowerShell, Git, Docker Desktop.
+- RAM từ 12 GB (container Mage giới hạn 6 GB).
+- Ổ đĩa: Parquet nguồn khoảng 1,5 GB; file DuckDB vài GB (DuckDB không tự thu hồi chỗ của dòng đã xóa khi nạp lại, xem [ingestion.md](docs/guides/ingestion.md#lưu-ý)).
+- Power BI Desktop để mở dashboard.
+
+Không cần cài Python, dbt hay DuckDB trên máy: mọi thứ chạy trong container.
+
+## Bắt đầu nhanh
+
+```powershell
+git clone https://github.com/thinhdao-77/NYC_TAXI_DataPipeline.git
+Set-Location NYC_TAXI_DataPipeline
+
+.\tasks.ps1 up          # build image, khởi động Mage (http://localhost:6789)
+.\tasks.ps1 e2e         # nạp 24 tháng -> dbt build -> QA -> xuất Parquet cho Power BI
+.\tasks.ps1 status      # lần chạy thành công gần nhất, cảnh báo gần đây
+```
+
+Lần chạy đầu tải 24 file Parquet từ TLC và build Fact từ đầu, nên lâu hơn nhiều so với các lượt sau. `.env` không bắt buộc: mọi biến (`DUCKDB_*`, `RAW_DATA_DIR`) có mặc định trong `docker-compose.yml`. Muốn nhận cảnh báo qua Slack/Discord/Teams thì sao chép `.env.example` thành `.env` và đặt `ALERT_WEBHOOK_URL`.
+
+Sau đó mở `powerbi/dashboard/NYC_Taxi_Dashboard.pbit`, nhập `RepoFolder` là thư mục gốc repo. Chi tiết: [docs/guides/powerbi.md](docs/guides/powerbi.md).
+
+## Lệnh thường dùng
+
+| Lệnh | Việc làm |
+|---|---|
+| `.\tasks.ps1 help` | Danh sách đầy đủ |
+| `.\tasks.ps1 up` / `down` / `logs` | Quản lý container |
+| `.\tasks.ps1 e2e ['{"file_name": "..."}']` | Pipeline end-to-end qua scheduler Mage (có retry, cảnh báo) |
+| `.\tasks.ps1 ingest-zones`, `.\tasks.ps1 ingest [file \| ALL \| JSON]` | Chỉ nạp dữ liệu vào `raw` |
+| `.\tasks.ps1 dbt-build [selector]` | `dbt build` trong container, vd `dbt-build fact_taxi_trips` |
+| `.\tasks.ps1 qa [smoke\|deep\|all\|full]` | Runner QA chỉ đọc |
+| `.\tasks.ps1 export-bi` | Xuất OLAP mart + Dimension ra `data/bi/*.parquet` |
+| `.\tasks.ps1 sql "<câu SQL>"` | Truy vấn DuckDB chỉ đọc |
+| `.\tasks.ps1 profile <file.sql>` | Chạy truy vấn profiling trong `sql/profiling/` |
+
+DuckDB chỉ cho một tiến trình ghi: không chạy pipeline Mage và `dbt build` cùng lúc, đóng Power BI/DBeaver nếu chúng đang mở file `.duckdb`.
+
+## Tài liệu
+
+| Bước | Hướng dẫn |
+|---|---|
+| Nạp dữ liệu nguồn vào `raw` | [docs/guides/ingestion.md](docs/guides/ingestion.md) |
+| Staging, cờ chất lượng, profiling | [docs/guides/staging.md](docs/guides/staging.md) |
+| Dimension (gồm SCD2 cho Location) | [docs/guides/dimension.md](docs/guides/dimension.md) |
+| Fact | [docs/guides/fact.md](docs/guides/fact.md) |
+| OLAP mart | [docs/guides/olap.md](docs/guides/olap.md) |
+| Kiểm thử (dbt test, runner QA) | [docs/guides/testing.md](docs/guides/testing.md) |
+| Pipeline end-to-end, lịch, cảnh báo | [docs/guides/pipeline.md](docs/guides/pipeline.md) |
+| Power BI | [docs/guides/powerbi.md](docs/guides/powerbi.md) |
+| Mô hình dữ liệu (business event, Star Schema, câu hỏi phân tích) | [docs/data_modeling/modeling.pdf](docs/data_modeling/modeling.pdf) |
 
 ## Cấu trúc repository
 
 ```text
-NYC_TAXI_DataPipeline/
-├── .github/workflows/ci.yml         # CI: cú pháp Python, compose config, dbt parse
-├── .env.example
-├── Dockerfile                       # Image Mage + requirements.txt
-├── docker-compose.yml
-├── requirements.txt                 # gói thêm cho Mage (duckdb)
-├── requirements-dbt.txt             # dbt, cài trong venv riêng /opt/dbt
-├── tasks.ps1                        # Lệnh thường dùng: .\tasks.ps1 help
-├── README.md
+.
+├── .github/workflows/        # ci.yml (kiểm tra khi push), auto-pr.yml (tự mở PR vào main)
+├── Dockerfile, docker-compose.yml, requirements.txt, requirements-dbt.txt
+├── tasks.ps1                 # lệnh thường dùng
 ├── data/
-│   ├── download_raw.ps1
-│   ├── raw/                         # File tải về, không commit
-│   ├── reference/                   # Taxi Zone Lookup và ranh giới khu vực
-│   └── warehouse/                   # File DuckDB nyc_taxi.duckdb, không commit
-├── dbt/                             # Tầng transform chính
-│   ├── dbt_project.yml, profiles.yml
-│   ├── macros/
-│   ├── models/
-│   │   ├── sources.yml              # stage.stg_yellow_taxi_trips, stage.stg_taxi_zone_lookup
-│   │   ├── staging/
-│   │   ├── dds/{dimensions,facts}/
-│   │   └── olap_marts/
-│   ├── seeds/
-│   └── tests/
-├── docs/
-│   ├── PROJECT_STATUS.md            # Tình trạng dự án, cập nhật theo mỗi thay đổi
-│   ├── guides/                      # staging, dimension, fact, testing
-│   ├── data_modeling/
-│   └── test_plans_and_logs/      # test plan + một lần chạy mẫu (log mới không commit)
-├── mage/                            # Ingestion / orchestration
-│   ├── data_exporters/
-│   ├── data_loaders/
-│   ├── pipelines/                   # ingest_zone_lookup, ingest_yellow_trips (ghi vào DuckDB)
-│   ├── transformers/
-│   ├── custom/
-│   └── io_config.yaml
-├── powerbi/
+│   ├── download_raw.ps1      # tải trước Parquet (tùy chọn, pipeline tự tải)
+│   ├── reference/            # Taxi Zone Lookup, ranh giới khu vực
+│   ├── raw/, warehouse/, bi/ # Parquet nguồn, file DuckDB, Parquet cho Power BI (không commit)
+├── mage/                     # pipelines ingest_zone_lookup, ingest_yellow_trips, nyc_taxi_e2e; custom/, callbacks/, utils/
+├── dbt/                      # models/{staging,dds,olap_marts}, snapshots/, macros/, tests/
 ├── sql/
-│   ├── ddl/                         # DDL Staging, Docker tự chạy khi tạo volume lần đầu
-│   ├── profiling/                   # SQL/Python kiểm tra dữ liệu nguồn
-│   └── warehouse/                   # SQL thủ công Dimension/Fact (tham khảo, đối chiếu)
-└── tests/                           # Runner QA chỉ đọc
+│   ├── ddl/                  # DDL raw/control (block nạp tự chạy)
+│   └── profiling/            # truy vấn đo lỗi dữ liệu nguồn
+├── tests/run_quality_tests.py
+├── powerbi/                  # scripts/, queries/ (Power Query), dax/, map_shapes/, theme/, dashboard/*.pbit
+└── docs/                     # PROJECT_STATUS.md, guides/, data_modeling/, test_plans_and_logs/
 ```
 
-Các file hướng dẫn chi tiết:
+Không commit: `data/raw`, `data/warehouse`, `data/bi`, `.env`, file `.pbix` (khoảng 125 MB, có dữ liệu).
 
-- [Hướng dẫn chạy Staging](docs/guides/staging.md)
-- [Dimension](docs/guides/dimension.md), [Fact](docs/guides/fact.md)
-- [Runner kiểm thử](docs/guides/testing.md)
+## Quy trình Git
 
-## Yêu cầu
-
-- Git
-- Docker Desktop và Docker Compose
-- PowerShell trên Windows (các lệnh trong hướng dẫn chạy Staging sử dụng PowerShell)
-- Kết nối Internet khi cần tải Parquet từ nguồn
-- Đủ dung lượng cho dữ liệu và Docker. Theo hướng dẫn Staging, toàn bộ dữ liệu Parquet khoảng 1,5 GB và bảng staging có thể chiếm khoảng 20 GB sau khi nạp đủ.
-- Nên có RAM từ 12 GB để chạy cấu hình Docker hiện tại; tham khảo cách giới hạn WSL trong [docs/guides/staging.md](docs/guides/staging.md).
-
-Không cần cài PostgreSQL hoặc Python trực tiếp trên máy để chạy các pipeline Mage trong Docker.
-
-## Bắt đầu nhanh: PostgreSQL Staging và Mage
-
-### 1. Lấy source và cấu hình môi trường
+Repo cá nhân, một người phát triển: tạo nhánh từ `main` mới nhất → commit → push → `auto-pr.yml` tự mở Pull Request vào `main` → CI chạy theo `push` → merge. Repo tự xóa nhánh remote sau khi merge.
 
 ```powershell
-git clone https://github.com/thinhdao-77/NYC_TAXI_DataPipeline.git
-Set-Location NYC_TAXI_DataPipeline
-Copy-Item .env.example .env
-```
-
-Mở `.env`, thay `POSTGRES_PASSWORD=change_me` bằng mật khẩu riêng trước lần khởi động đầu tiên. Không commit `.env`.
-
-Các biến mặc định trong `.env.example`:
-
-| Biến | Giá trị mẫu | Ý nghĩa |
-|---|---|---|
-| `POSTGRES_DB` | `nyc_taxi_staging` | Tên database |
-| `POSTGRES_USER` | `taxi_user` | Tài khoản database |
-| `POSTGRES_PASSWORD` | `change_me` | Cần thay bằng mật khẩu riêng |
-| `POSTGRES_HOST` | `postgres` | Tên service trong Docker network |
-| `POSTGRES_PORT` | `5432` | Cổng PostgreSQL trong Docker network |
-
-### 2. Khởi động dịch vụ
-
-```powershell
-docker compose up -d --build
-docker compose ps
-```
-
-Chờ service `postgres` ở trạng thái `healthy` và Mage chạy. Giao diện Mage: <http://localhost:6789>.
-
-Docker Compose cấu hình PostgreSQL và Mage với `restart: unless-stopped`, giới hạn bộ nhớ, và healthcheck cho PostgreSQL. Các tham số cụ thể nằm trong [docker-compose.yml](docker-compose.yml).
-
-### 3. Xác nhận các bảng Staging
-
-Các script trong `sql/ddl/` được PostgreSQL image chạy khi khởi tạo volume lần đầu. Kiểm tra bảng:
-
-```powershell
-docker compose exec -T postgres psql -P pager=off -U taxi_user -d nyc_taxi_staging -c "\dt stage.*" -c "\dt control.*"
-```
-
-Các bảng dự kiến:
-
-- `stage.stg_yellow_taxi_trips`
-- `stage.stg_taxi_zone_lookup`
-- `control.etl_control`
-
-Nếu đã có volume PostgreSQL từ trước, thay đổi các script khởi tạo không tự chạy lại trên volume đó. Hướng dẫn kiểm tra và chạy DDL thủ công xem trong [docs/guides/staging.md](docs/guides/staging.md).
-
-### 4. Nạp Taxi Zone Lookup
-
-Trong Mage, mở pipeline `ingest_zone_lookup`, sau đó chạy block `export_zone_lookup` cùng các upstream block. Pipeline đọc `data/reference/taxi_zone_lookup.csv` và nạp vào `stage.stg_taxi_zone_lookup`.
-
-Chi tiết thao tác trên Mage UI được mô tả trong [docs/guides/staging.md](docs/guides/staging.md).
-
-### 5. Nạp Yellow Taxi Trip Records
-
-Mở pipeline `ingest_trips_to_postgres`. Mặc định biến `file_name` là `ALL`, nghĩa là pipeline xét các tháng 2024–2025.
-
-Các biến pipeline được hỗ trợ:
-
-| Biến | Ví dụ | Ý nghĩa |
-|---|---|---|
-| `file_name` | `yellow_tripdata_2024-01.parquet` | Chỉ nạp một file cụ thể |
-| `file_name` | `ALL` | Xét toàn bộ các tháng trong phạm vi và bộ lọc |
-| `year` | `2024` | Chỉ xét một năm |
-| `start_month` | `2024-01` | Tháng bắt đầu |
-| `end_month` | `2024-03` | Tháng kết thúc |
-| `use_lset` | `true` | Bắt đầu từ tháng LSET liên tục cuối cùng; file đã thành công sẽ được bỏ qua |
-
-Pipeline có thể tự tải các Parquet còn thiếu vào `data/raw/`; chạy script tải trước là tùy chọn:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File data\download_raw.ps1
-```
-
-Để kiểm tra lịch sử nạp:
-
-```powershell
-docker compose exec -T postgres psql -P pager=off -U taxi_user -d nyc_taxi_staging -c "SELECT source_file_name, rows_read, rows_loaded, status, started_at, finished_at FROM control.etl_control ORDER BY control_id;"
-```
-
-Pipeline nạp theo batch, thử lại khi mở kết nối PostgreSQL hoặc tải file, ghi log trạng thái theo file và tiếp tục xét các file còn lại khi một file lỗi. Nếu kết nối bị gián đoạn trong lúc nạp, giao dịch của file đó sẽ thất bại; xem log `FAILED`, xử lý nguyên nhân rồi chạy lại pipeline để nạp lại file. Không chạy đồng thời nhiều lượt nạp trên cùng một file.
-
-> Hướng dẫn đầy đủ về biến Mage, kiểm tra dữ liệu, SQL profiling, chạy lại và xử lý sự cố nằm trong [docs/guides/staging.md](docs/guides/staging.md).
-
-## Kiểm tra dữ liệu Staging
-
-Các truy vấn kiểm tra dữ liệu đặt tại `sql/profiling/`. Chạy truy vấn bằng PowerShell, ví dụ:
-
-```powershell
-Get-Content sql\profiling\03_profile_by_vendor.sql | docker compose exec -T postgres psql -P pager=off -U taxi_user -d nyc_taxi_staging
-```
-
-Một số truy vấn cần tham số hoặc tùy chọn `psql`; xem phần tương ứng trong [docs/guides/staging.md](docs/guides/staging.md) trước khi chạy. Một số phép kiểm tra quét toàn bảng lớn và có thể mất vài phút.
-
-Staging giữ dữ liệu nguồn và các cột kiểm toán; các bước làm sạch, lọc nghiệp vụ và mô hình hóa thuộc các tầng tiếp theo.
-
-## Kiểm thử ETL Stage và Dimension
-
-Runner QA chỉ đọc nằm trong `tests/run_quality_tests.py`; hướng dẫn và Test Plan ở `docs/guides/testing.md` và `docs/test_plans_and_logs/test-plan.md`.
-
-```powershell
-python tests\run_quality_tests.py --suite smoke
-python tests\run_quality_tests.py --suite all
-```
-
-Các kết quả được lưu dạng Markdown và JSON dưới `docs/test_plans_and_logs/runs/`. Full scans trên bảng trips chỉ chạy khi thêm `--include-large-scans`. Runner không gọi script ETL hoặc DDL/DML.
-
-## dbt: Dimension và Fact
-
-Tầng DDS được build bằng dbt, chạy trong container Mage (image đã cài `dbt-postgres` theo `requirements.txt`). Cần nạp Staging trước.
-
-```powershell
-.\tasks.ps1 dbt-build                  # build + test toàn bộ model
-.\tasks.ps1 dbt-build dim_vendor       # một model
-.\tasks.ps1 dbt-run fact_taxi_trips    # chỉ chạy Fact (incremental theo batch_id)
-```
-
-Lệnh tương đương không dùng script:
-
-```powershell
-docker compose exec -T mage dbt build --project-dir /home/src/dbt --profiles-dir /home/src/dbt
-```
-
-| Model | Bảng vật lý | Surrogate key |
-|---|---|---|
-| `dim_date` | `dds.dimdate` | `YYYYMMDD` |
-| `dim_time` | `dds.dimtime` | `hour * 100 + minute` |
-| `dim_location`, `dim_vendor`, `dim_payment_type`, `dim_rate_code` | `dds.dimlocation`, ... | bằng mã tự nhiên |
-| `dim_passenger_group`, `dim_distance_group` | `dds.dimpassengergroup`, `dds.dimdistancegroup` | 1..3 (tĩnh) |
-| `fact_taxi_trips` | `dds.facttaxitrip` | — (incremental) |
-
-Mỗi Dimension có dòng Unknown `SK = -1`. SK được sinh ổn định để Fact incremental không bị lệch khóa khi Dimension build lại.
-
-`sql/warehouse/` giữ bản SQL thủ công (`psql`) của Dimension/Fact để tham khảo và đối chiếu. **Không trộn** hai cách trên cùng database: dbt build lại bảng Dimension mỗi lần chạy, nên khóa ngoại do `03_create_fact.sql` tạo sẽ bị xóa theo.
-
-OLAP mart và Power BI chưa được triển khai.
-
-## Cấu hình và lưu ý dữ liệu
-
-- Dữ liệu thô trong `data/raw/`, file `.env`, file DuckDB và dữ liệu sinh ra của Mage không nên commit.
-- PostgreSQL lưu dữ liệu trong Docker volume `pgdata`; `docker compose down` không xóa volume.
-- Không dùng `docker compose down -v` trừ khi chủ động muốn xóa dữ liệu PostgreSQL cục bộ.
-- Đổi mật khẩu trong `.env` không tự đổi mật khẩu đã được khởi tạo trong volume hiện có.
-- Dữ liệu chuyến đi được nạp vào `stage.stg_yellow_taxi_trips`; nhật ký mỗi lần nạp được lưu trong `control.etl_control`.
-
-## Quy trình làm việc với Git
-
-Repo cá nhân, một người phát triển. Quy trình: tạo nhánh từ `main` mới nhất → commit → push → workflow `auto-pr.yml` tự mở Pull Request vào `main` → CI (`ci.yml`) chạy theo `push` → merge. Repo bật *Automatically delete head branches*, nên sau khi merge chỉ cần dọn nhánh local.
-
-```powershell
-# Lấy code
-git clone https://github.com/thinhdao-77/NYC_TAXI_DataPipeline.git
-Set-Location NYC_TAXI_DataPipeline
-
-# Tạo nhánh từ main mới nhất
-git checkout main
-git pull --ff-only
+git checkout main; git pull --ff-only
 git checkout -b feat/<pham-vi>
-
-# Kiểm tra và lưu thay đổi
-git status
-git add <duong-dan-file>
-git commit -m "feat(<scope>): describe the change"
+git add <file>; git commit -m "feat(<scope>): <mô tả>"
 git push -u origin feat/<pham-vi>
 
-# Sau khi merge PR
-git checkout main
-git pull --ff-only
-.	asks.ps1 prune-branches
+# sau khi merge
+git checkout main; git pull --ff-only; .\tasks.ps1 prune-branches
 ```
 
-Không dùng `git add .` một cách máy móc. Kiểm tra `git status` để tránh đưa `.env`, dữ liệu lớn, file `.pbix` hoặc file sinh tự động vào commit.
-
-### Quy ước commit
-
-```text
-<type>(<scope>): <mô tả ngắn>
-```
-
-Một số type thường dùng: `feat`, `fix`, `test`, `docs`, `chore`, `refactor`. Scope có thể là `staging`, `mage`, `dbt`, `dim`, `fact`, `olap`, `powerbi` hoặc `docs`.
-
-## Lộ trình
-
-Lộ trình hoàn thiện gồm: triển khai cấu hình và model dbt; xây dựng DDS/OLAP; tích hợp pipeline end-to-end; bổ sung kiểm thử; sau đó hoàn thiện Power BI và báo cáo. Chỉ đánh dấu các hạng mục là hoàn thành khi code và hướng dẫn chạy tương ứng đã có trong repo và được kiểm thử.
+Quy ước commit: `<type>(<scope>): <mô tả ngắn>`, type thường dùng `feat`, `fix`, `docs`, `test`, `chore`, `refactor`; scope như `mage`, `dbt`, `fact`, `olap`, `powerbi`, `pipeline`, `docs`.

@@ -8,8 +8,8 @@ services:
     deploy:
       resources:
         limits:
-          # DuckDB chạy trong tiến trình Mage/dbt, nên RAM trước đây chia cho Postgres
-          # được dồn vào đây. Giữ DUCKDB_MEMORY_LIMIT thấp hơn giới hạn này.
+          # DuckDB chạy trong tiến trình Mage/dbt (không có service database riêng),
+          # nên RAM dành cho cả hai. Giữ DUCKDB_MEMORY_LIMIT thấp hơn giới hạn này.
           memory: 6g
     # Giá trị lấy từ .env (nếu có), nếu không dùng mặc định sau dấu :-
     environment:
